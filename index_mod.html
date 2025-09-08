@@ -1,0 +1,1952 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Dosis Perronas</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React Libraries -->
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    
+    <!-- Babel to transpile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- jsPDF for PDF Export -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #020617; /* bg-slate-950 */
+        }
+        .prose p { margin-bottom: 0.75em; }
+        .prose strong { font-weight: bold; color: #93c5fd; } /* text-blue-300 */
+        .prose ul, .prose ol { margin-left: 1.5em; margin-bottom: 1em; }
+        .prose li { margin-bottom: 0.25em; }
+        .prose h3 { font-size: 1.1em; font-weight: bold; margin-top: 1em; margin-bottom: 0.5em; color: #60a5fa; } /* text-blue-400 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #1e293b; }
+        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        .tooltip {
+            position: relative;
+            display: inline-block;
+        }
+        .tooltip .tooltiptext {
+            visibility: hidden;
+            width: 220px;
+            background-color: #1e293b;
+            color: #fff;
+            text-align: center;
+            border-radius: 6px;
+            padding: 5px;
+            position: absolute;
+            z-index: 101;
+            bottom: 125%;
+            left: 50%;
+            margin-left: -110px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 0.75rem;
+            line-height: 1.25;
+        }
+        .tooltip:hover .tooltiptext {
+            visibility: visible;
+            opacity: 1;
+        }
+        .ai-response-container {
+            white-space: pre-wrap; /* Allows text to wrap and respects line breaks */
+            font-family: monospace;
+            background-color: #1a202c;
+            padding: 1rem;
+            border-radius: 0.5rem;
+            color: #e2e8f0;
+            margin-top: 1rem;
+            border: 1px solid #4a5568;
+        }
+        .gemini-response {
+            white-space: pre-wrap;
+            text-align: left;
+            font-family: sans-serif;
+            line-height: 1.6;
+        }
+        .gemini-response h3 {
+            font-size: 1.25rem;
+            font-weight: bold;
+            color: #60a5fa; /* text-blue-400 */
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+            border-bottom: 1px solid #334155;
+            padding-bottom: 0.25rem;
+        }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800&display=swap" rel="stylesheet">
+
+  <!-- === Loader externo de medicamentos === -->
+  <script>
+    const DATA_FILES = [
+      './data/meds_strict_1.json',
+      './data/meds_strict_2.json',
+      './data/meds_strict_3.json',
+      './data/meds_strict_4.json',
+      './data/meds_strict_5.json',
+      './data/meds_strict_6.json',
+    ];
+
+    function mergeMedRecords(a, b) {
+      const out = JSON.parse(JSON.stringify(a));
+      out.concentration = out.concentration || {};
+      if (b.concentration) {
+        for (const k of Object.keys(b.concentration)) {
+          if (!out.concentration[k]) out.concentration[k] = b.concentration[k];
+        }
+      }
+      out.doses = out.doses || {};
+      if (b.doses) {
+        for (const specie of Object.keys(b.doses)) {
+          const existing = out.doses[specie] || [];
+          const incoming = b.doses[specie] || [];
+          const keyOf = (d) => [
+            (d.purpose || '').toLowerCase(),
+            (d.route || '').toLowerCase(),
+            (d.frequency || '').toLowerCase(),
+            (d.unit || '').toLowerCase()
+          ].join('|');
+          const map = new Map(existing.map(d => [keyOf(d), d]));
+          for (const d of incoming) {
+            const k = keyOf(d);
+            if (!map.has(k)) map.set(k, d);
+          }
+          out.doses[specie] = Array.from(map.values());
+        }
+      }
+      return out;
+    }
+
+    function dedupeByName(records) {
+      const map = new Map();
+      for (const r of records) {
+        const key = r.name.trim().toLowerCase();
+        if (!map.has(key)) map.set(key, r);
+        else map.set(key, mergeMedRecords(map.get(key), r));
+      }
+      return Array.from(map.values());
+    }
+
+    async function loadStrictMeds() {
+      const results = await Promise.all(
+        DATA_FILES.map(p => fetch(p).then(r => r.json()))
+      );
+      const flat = results.flat();
+      const clean = dedupeByName(flat);
+      return clean.filter(m => m.doses && Object.keys(m.doses).length && m.concentration && Object.keys(m.concentration).length);
+    }
+  </script>
+
+</head>
+<body class="bg-slate-950">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- SVG Icons ---
+        const ClipboardList = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><rect width="8" height="4" x="8" y="2" rx="1" ry="1" /><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2" /><path d="M12 11h4" /><path d="M12 16h4" /><path d="M8 11h.01" /><path d="M8 16h.01" /></svg> );
+        const X = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="18" x2="6" y1="6" y2="18" /><line x1="6" x2="18" y1="6" y2="18" /></svg> );
+        const PlusCircle = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10" /><line x1="12" x2="12" y1="8" y2="16" /><line x1="8" x2="16" y1="12" y2="12" /></svg> );
+        const RotateCw = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 2v6h-6" /><path d="M3 12a9 9 0 0 1 15-6.7L21 8" /><path d="M3 22v-6h6" /><path d="M21 12a9 9 0 0 1-15 6.7L3 16" /></svg> );
+        const Siren = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M12 12c-1.933 0-3.5-1.567-3.5-3.5S10.067 5 12 5s3.5 1.567 3.5 3.5"/><path d="M12 12v6"/><path d="M12 12H6m6 0h6"/><path d="M18 12c0 3.314-2.686 6-6 6s-6-2.686-6-6"/><path d="M6 12c0-3.314 2.686-6 6-6s6 2.686 6 6"/><path d="M12 5V2"/><path d="M5 12H2m20 0h-3"/></svg> );
+        const Calculator = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><rect width="16" height="20" x="4" y="2" rx="2" /><line x1="8" x2="16" y1="6" y2="6" /><line x1="16" x2="16" y1="14" y2="18" /><line x1="16" x2="12" y1="14" y2="14" /><line x1="12" x2="12" y1="14" y2="18" /><line x1="8" x2="8" y1="14" y2="18" /></svg> );
+        const AlertTriangle = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><line x1="12" x2="12" y1="9" y2="13"/><line x1="12" x2="12.01" y1="17" y2="17"/></svg> );
+        const Square = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><rect width="18" height="18" x="3" y="3" rx="2"/></svg> );
+        const ChevronDown = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="m6 9 6 6 6-6"/></svg> );
+        const Droplet = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M12 22a7 7 0 0 0 7-7c0-2-1-3.9-3-5.5s-3.5-4-4-6.5c-.5 2.5-2 4.9-4 6.5C5 11.1 4 13 4 15a7 7 0 0 0 7 7z"/></svg> );
+        const Beaker = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M4.5 3h15"/><path d="M6 3v16a2 2 0 0 0 2 2h8a2 2 0 0 0 2-16V3"/><path d="M6 14h12"/></svg> );
+        const Menu = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></svg> );
+        const MoreVertical = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg> );
+        const HelpCircle = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"></circle><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg> );
+        const FileDown = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></svg> );
+        const Star = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" /></svg> );
+        const BookOpen = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg> );
+        const HeartPulse = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M19.5 12.5c0-1.5-1.1-2.8-2.5-3-1.4-.2-2.8.4-3.5 1.5-1.1 1.6-3.2 1.6-4.2 0-1.1-1.6-3.2-1.6-4.2 0C3.7 12.4 3 14.2 3 16c0 2.8 2.2 5 5 5 1.2 0 2.3-.4 3.1-1.2.8.8 1.9 1.2 3.1 1.2 2.8 0 5-2.2 5-5 0-1.1-.4-2.2-1-3-.6-.8-1.5-1.2-2.5-1.2z"/><path d="M12.5 10.5 15 13l2-1.5-2-1.5-2.5 2.5z"/></svg> );
+        const FlaskConical = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M10 2v7.31"/><path d="M14 9.31V2"/><path d="M8.5 2h7"/><path d="M14 9.31 16.5 4"/><path d="M10 9.31 7.5 4"/><path d="M12 14v8"/><path d="M8.7 14H5.1c-1.7 0-3.1 1.4-3.1 3.1 0 1.3.8 2.5 2 2.9l1.2.4c.9.3 1.8.3 2.7 0l1.2-.4c1.2-.4 2-1.6 2-2.9.1-1.7-1.3-3.1-3-3.1h-3.7z"/></svg> );
+        const Save = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><polyline points="17 21 17 13 7 13 7 21" /><polyline points="7 3 7 8 15 8" /></svg> );
+        const Slash = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> );
+        const Lightbulb = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 8c0 1 .2 2.2 1.5 3.5.7.8 1.3 1.5 1.5 2.5"/><path d="M9 18h6"/><path d="M10 22h4"/></svg> );
+        const Zap = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> );
+        const Shuffle = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="16 16 21 16 21 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg> );
+        const Users = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg> );
+        const Clock = (props) => ( <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" {...props}><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> );
+
+        // --- UNIFIED DATABASE ---
+        const initialMedications = [
+          
+        ];
+
+        // --- NEW DATA STRUCTURES ---
+        const physiologicalConstants = {
+            'Perros': { 'Temp °C': '37.5-39.2', 'FC (lpm)': '60-140', 'FR (rpm)': '10-30', 'PAS (mmHg)': '90-140' },
+            'Gatos': { 'Temp °C': '38.0-39.2', 'FC (lpm)': '140-220', 'FR (rpm)': '20-40', 'PAS (mmHg)': '80-130' },
+            'Bovinos': { 'Temp °C': '38.0-39.5', 'FC (lpm)': '40-80', 'FR (rpm)': '10-30', 'PAS (mmHg)': '100-140' },
+            'Equinos': { 'Temp °C': '37.5-38.5', 'FC (lpm)': '28-44', 'FR (rpm)': '8-16', 'PAS (mmHg)': '90-130' },
+            'Ovinos': { 'Temp °C': '38.5-40.0', 'FC (lpm)': '70-90', 'FR (rpm)': '12-25', 'PAS (mmHg)': '90-130' },
+            'Caprinos': { 'Temp °C': '38.5-40.5', 'FC (lpm)': '70-90', 'FR (rpm)': '15-30', 'PAS (mmHg)': '90-130' },
+            'Porcinos': { 'Temp °C': '38.0-39.5', 'FC (lpm)': '70-120', 'FR (rpm)': '30-45', 'PAS (mmHg)': '100-150' },
+            'Conejos': { 'Temp °C': '38.5-40.0', 'FC (lpm)': '180-350', 'FR (rpm)': '30-60', 'PAS (mmHg)': '90-130' },
+            'Hurones': { 'Temp °C': '37.8-39.4', 'FC (lpm)': '180-250', 'FR (rpm)': '33-36', 'PAS (mmHg)': '120-160' },
+            'Cobayos': { 'Temp °C': '37.2-39.5', 'FC (lpm)': '230-380', 'FR (rpm)': '45-110', 'PAS (mmHg)': '90-120' },
+            'Psitácidas (promedio)': { 'Temp °C': '40.0-42.0', 'FC (lpm)': '250-600', 'FR (rpm)': '25-50', 'PAS (mmHg)': 'N/A' },
+            'Iguanas': { 'Temp °C': '28.0-35.0 (gradiente)', 'FC (lpm)': '40-60', 'FR (rpm)': '10-20', 'PAS (mmHg)': 'N/A' },
+        };
+
+        const anestheticProtocols = [
+            // --- PERROS ---
+            { name: 'Perro Sano (ASA I/II) - Reversible', species: 'Perros', asa: 'I-II', premed: 'Dexmedetomidina (2-5 mcg/kg) + Butorfanol (0.2-0.4 mg/kg) IM.', induction: 'Propofol (2-4 mg/kg) o Alfaxalona (1-2 mg/kg) IV a efecto.', maintenance: 'Isoflurano / Sevoflurano.', notes: 'Buena sedación y analgesia, totalmente reversible con Atipamezol. Ideal para procedimientos de rutina.' },
+            { name: 'Perro Sano (ASA I/II) - Opción Clásica', species: 'Perros', asa: 'I-II', premed: 'Acepromacina (0.02-0.05 mg/kg) + Buprenorfina (0.01-0.02 mg/kg) IM.', induction: 'Propofol (3-5 mg/kg) IV a efecto.', maintenance: 'Isoflurano.', notes: 'Buena sedación, pero no es reversible y puede causar hipotensión. Requiere buen monitoreo.' },
+            { name: 'Perro Geriátrico/Débil (ASA III/IV)', species: 'Perros', asa: 'III-IV', premed: 'Midazolam (0.2-0.3 mg/kg) + Fentanilo (2-5 mcg/kg) IV lento.', induction: 'Etomidato (1-2 mg/kg) o Alfaxalona (1-2 mg/kg) IV. Alternativa: Propofol a dosis reducida (1-2 mg/kg) co-inducido con Midazolam.', maintenance: 'Isoflurano / Sevoflurano a la CAM más baja posible.', notes: 'Protocolo enfocado en la máxima estabilidad cardiovascular.' },
+            { name: 'Perro para Cesárea', species: 'Perros', asa: 'II-III', premed: 'Bajo o nulo. Considerar opioide de acción corta (Fentanilo 2 mcg/kg IV) justo antes de la inducción.', induction: 'Propofol (3-6 mg/kg) o Alfaxalona (2-3 mg/kg) IV a efecto (rápido para minimizar depresión fetal).', maintenance: 'Isoflurano. Anestesia epidural es la mejor opción para la analgesia.', notes: 'El objetivo es minimizar la depresión de los cachorros. Tener equipo de reanimación neonatal (Naloxona, Doxapram) listo.' },
+            { name: 'Perro Braquicéfalo', species: 'Perros', asa: 'II-III', premed: 'Maropitant (1 mg/kg) SC 1h antes. Butorfanol (0.2 mg/kg) + Midazolam (0.2 mg/kg) IM.', induction: 'Inducción rápida con Propofol (3-5 mg/kg) IV y asegurar vía aérea inmediatamente (intubación).', maintenance: 'Isoflurano / Sevoflurano.', notes: 'Pre-oxigenar por 5 minutos es crucial. Mantener intubado el mayor tiempo posible durante la recuperación.' },
+            
+            // --- GATOS ---
+            { name: 'Gato Sano (ASA I/II) - "Kitty Magic" Mejorado', species: 'Gatos', asa: 'I-II', premed: 'Dexmedetomidina (5-10 mcg/kg) + Ketamina (3-5 mg/kg) + Buprenorfina (0.02 mg/kg) IM, todo en la misma jeringa.', induction: 'Puede no ser necesaria, o complementar com Propofol/Alfaxalona IV a efecto.', maintenance: 'Isoflurano / Sevoflurano.', notes: 'Excelente inmovilización y analgesia. Reversible (Atipamezol revierte Dexmedetomidina).' },
+            { name: 'Gato Obstruido/Urgencia (ASA IV)', species: 'Gatos', asa: 'IV', premed: 'Butorfanol (0.2-0.4 mg/kg) + Midazolam (0.2 mg/kg) IM. Evitar α2-agonistas y Ketamina.', induction: 'Propofol (dosis bajas, 2-4 mg/kg) o Alfaxalona (1-2 mg/kg) IV. Anestesia epidural es altamente recomendada.', maintenance: 'Sevoflurano (rápida eliminación).', notes: 'Enfoque en estabilización primero. Corregir hiperkalemia y deshidratación antes de anestesiar.' },
+            { name: 'Gato Agresivo para Sedación', species: 'Gatos', asa: 'I-II', premed: 'Gabapentina oral (100 mg/gato) 2-3 horas antes de la cita. En clínica: Tiletamina/Zolazepam (Zoletil®) (2-4 mg/kg) IM.', induction: 'N/A para sedación.', maintenance: 'N/A', notes: 'Zoletil proporciona una sedación profunda y rápida. La premedicación oral reduce el estrés.' },
+
+            // --- GRANDES ESPECIES ---
+            { name: 'Equino - Sedación de Campo', species: 'Equinos', asa: 'I-III', premed: 'Xilacina (0.5-1.1 mg/kg) IV o Detomidina (10-20 mcg/kg) IV. Esperar efecto máximo.', induction: 'Ketamina (2.2 mg/kg) + Diazepam o Midazolam (0.05-0.1 mg/kg) IV.', maintenance: 'Infusión de "Triple Gota": Guaifenesina 5% (50mg/mL) + Ketamina (2mg/mL) + Xilacina (0.5mg/mL) IV a ritmo de 1-2 mL/kg/hr.', notes: 'Protocolo de TIVA (Anestesia Total Intravenosa) muy común en campo para procedimientos de hasta 60 minutos.' },
+            { name: 'Bovino - Sedación y Anestesia Local', species: 'Bovinos', asa: 'I-III', premed: 'Xilacina (0.05-0.1 mg/kg) IM. ¡Los bovinos son muy sensibles!', induction: 'Anestesia local infiltrativa o bloqueo regional (ej. Bloqueo paravertebral) con Lidocaína al 2%.', maintenance: 'N/A', notes: 'Para muchos procedimientos de campo (cirugía de flanco, etc.), la sedación profunda com anestesia local es suficiente y más segura que la anestesia general.' },
+        ];
+        const SEDATIVE_ANESTHETIC_DRUGS = [
+            "Ketanil® (Ketamina 200 mg/mL)",
+            "Ketovet (Ketamina)",
+            "Kronamina Vet® (Dexmedetomidina)",
+            "Xilacina al 10% (Clorhidrato de Xilacina)",
+            "Zoletil 100 (Tiletamina + Zolazepam)"
+        ];
+        
+        // --- Reusable Info Card Component (GLOBAL SCOPE) ---
+        const InfoCard = ({ icon, title, color, children }) => {
+            if (!children || (Array.isArray(children) && children.length === 0)) return null;
+            const colorClasses = {
+                red: 'border-red-500/50 bg-red-500/10 text-red-300',
+                yellow: 'border-yellow-500/50 bg-yellow-500/10 text-yellow-300',
+                blue: 'border-blue-500/50 bg-blue-500/10 text-blue-300',
+                green: 'border-green-500/50 bg-green-500/10 text-green-300',
+                purple: 'border-purple-500/50 bg-purple-500/10 text-purple-300',
+                indigo: 'border-indigo-500/50 bg-indigo-500/10 text-indigo-300',
+            };
+
+            return (
+                <div className={`p-3 rounded-lg border ${colorClasses[color]}`}>
+                    <div className="flex items-center mb-1">
+                        {icon}
+                        <h3 className={`ml-2 font-bold text-xs uppercase tracking-wider text-${color}-400`}>{title}</h3>
+                    </div>
+                    <div className="text-gray-300 text-xs pl-6 prose prose-sm" dangerouslySetInnerHTML={{ __html: String(children).replace(/\n/g, '<br/>') }} />
+                </div>
+            );
+        };
+        
+        // --- Reusable Medication Info Display (GLOBAL SCOPE) ---
+        const MedicationInfo = ({ medData }) => {
+            if(!medData) return null;
+            const interactions = medData.interactions?.summary + (medData.interactions?.specifics?.map(i => `<br/>- ${i.drug}: ${i.effect}`).join('') || '');
+             return(
+                  <div className="pt-4 border-t border-slate-700">
+                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+                         <InfoCard icon={<Zap size={16} className="text-green-400"/>} title="Función" color="green">{medData.functions}</InfoCard>
+                         <InfoCard icon={<Lightbulb size={16} className="text-blue-400"/>} title="Recomendaciones" color="blue">{medData.recommendations}</InfoCard>
+                         <InfoCard icon={<AlertTriangle size={16} className="text-yellow-400"/>} title="Precauciones" color="yellow">{medData.precautions}</InfoCard>
+                         <InfoCard icon={<Slash size={16} className="text-red-400"/>} title="Contraindicaciones" color="red">{medData.contraindications}</InfoCard>
+                         <InfoCard icon={<Users size={16} className="text-purple-400"/>} title="Interacciones" color="purple">{interactions}</InfoCard>
+                         <InfoCard icon={<Shuffle size={16} className="text-indigo-400"/>} title="Sustitutos" color="indigo">{medData.substitutes?.join(', ')}</InfoCard>
+                     </div>
+                 </div>
+             );
+        }
+        
+        // --- HELPER & TOOL COMPONENTS ---
+        const InfoTooltip = ({ text }) => (
+            <div className="tooltip ml-1">
+                <HelpCircle size={14} className="text-gray-400" />
+                <span className="tooltiptext">{text}</span>
+            </div>
+        );
+
+        const HistoryModal = ({ history, onClose, onRestore }) => {
+            return (
+                <div className="fixed inset-0 bg-slate-900 bg-opacity-75 z-50 flex justify-center items-center p-4">
+                    <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-2xl p-6 h-[90vh] flex flex-col">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-white">Historial de Dosis (Últimas 15)</h2>
+                            <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                        </div>
+                        <ul className="space-y-3 overflow-y-auto flex-grow pr-2">
+                            {history.length > 0 ? history.map(entry => (
+                                <li key={entry.id} className="bg-slate-700/50 p-3 rounded-lg">
+                                    <div className="flex justify-between items-center">
+                                        <div>
+                                            <p className="font-bold text-white">{entry.patient.name} <span className="text-sm font-normal text-gray-400">({entry.patient.species}{entry.patient.subSpecies ? `/${entry.patient.subSpecies}`:''}, {entry.patient.weight}kg)</span></p>
+                                            <p className="text-xs text-gray-300 mt-1 truncate">{entry.medications.map(med => med.name.split('(')[0].trim()).join(', ')}</p>
+                                            <p className="text-xs text-gray-400">{entry.timestamp}</p>
+                                        </div>
+                                        <button onClick={() => onRestore(entry)} className="p-2 text-blue-400 hover:text-white" title="Restaurar datos"><PlusCircle size={20}/></button>
+                                    </div>
+                                </li>
+                            )) : <p className="text-center text-gray-400">No hay dosis guardadas.</p>}
+                        </ul>
+                    </div>
+                </div>
+            )
+        };
+
+        const InfoModal = ({ title, onClose, children }) => {
+            return (
+                <div className="fixed inset-0 bg-slate-900 bg-opacity-75 z-[100] flex justify-center items-center p-4">
+                    <div className="bg-slate-800 rounded-lg shadow-xl w-full max-w-lg p-6 relative h-[90vh] overflow-y-auto">
+                        <div className="flex justify-between items-center mb-4 sticky top-0 bg-slate-800 py-2">
+                            <h2 className="text-2xl font-bold text-white">{title}</h2>
+                            <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                        </div>
+                        <div className="prose prose-invert max-w-none text-gray-300">
+                           {children}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const AiInfoModal = ({ med, show, onClose }) => {
+            const [response, setResponse] = React.useState('');
+            const [isLoading, setIsLoading] = React.useState(false);
+            const [error, setError] = React.useState(null);
+
+            React.useEffect(() => {
+                if (show && med) {
+                    fetchAiInfo();
+                } else {
+                    setResponse('');
+                    setError(null);
+                }
+            }, [show, med]);
+
+            const fetchAiInfo = async () => {
+                setIsLoading(true);
+                setError(null);
+                setResponse('');
+
+                const systemPrompt = "Eres un asistente de farmacología veterinaria. Proporciona un informe detallado y bien estructurado sobre el siguiente medicamento, enfocado en su uso en animales. Incluye secciones como Mecanismo de Acción, Farmacocinética, Espectro (si aplica), Efectos Adversos Detallados, y Consideraciones Clínicas.";
+                const userQuery = `Genera un informe detallado sobre el uso veterinario del medicamento: ${med.name}.`;
+                const apiKey = "";
+                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+
+                try {
+                    const payload = {
+                        contents: [{ parts: [{ text: userQuery }] }],
+                        tools: [{ "google_search": {} }],
+                        systemInstruction: { parts: [{ text: systemPrompt }] },
+                    };
+
+                    const apiResponse = await fetch(apiUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (!apiResponse.ok) {
+                        throw new Error(`API error: ${apiResponse.statusText}`);
+                    }
+
+                    const result = await apiResponse.json();
+                    const text = result.candidates?.[0]?.content?.parts?.[0]?.text;
+                    
+                    if (text) {
+                        setResponse(text);
+                    } else {
+                        throw new Error("No se recibió contenido en la respuesta.");
+                    }
+
+                } catch (e) {
+                    console.error("Error fetching AI info:", e);
+                    setError("No se pudo obtener la información. Inténtalo de nuevo.");
+                } finally {
+                    setIsLoading(false);
+                }
+            };
+            
+            if(!show) return null;
+
+            return (
+                <InfoModal title={`Información Detallada: ${med.name}`} onClose={onClose}>
+                    {isLoading && <p className="animate-pulse">Buscando con Gemini...</p>}
+                    {error && <p className="text-red-400">{error}</p>}
+                    {response && <div className="gemini-response" dangerouslySetInnerHTML={{__html: response.replace(/\*\*(.*?)\*\*/g, '<h3>$1</h3>')}} />}
+                </InfoModal>
+            );
+        };
+        
+        const EmergencyMode = ({ onExit }) => {
+            const emergencyDrugs = [
+                { name: 'Adrenalina (1 mg/mL)', dose: 0.01, unit: 'mg/kg', resultUnit: 'mL/kg', calculation: (w,d) => (w*d)/1, info: 'Para PCR o shock anafiláctico. Diluir 1:10 para uso IV (0.1 mg/mL).' },
+                { name: 'Atropina (0.5 mg/mL)', dose: 0.02, unit: 'mg/kg', resultUnit: 'mL/kg', calculation: (w,d) => (w*d)/0.5, info: 'Para bradicardia severa. Dosis en mL es 0.04 x peso en kg.' },
+                { name: 'Diazepam (5 mg/mL)', dose: 0.5, unit: 'mg/kg', resultUnit: 'mL/kg', calculation: (w,d) => (w*d)/5, info: 'Para estado epiléptico. Administrar IV lenta.' },
+                { name: 'Lidocaína 2% (20 mg/mL)', dose: 2, unit: 'mg/kg', resultUnit: 'mL/kg', calculation: (w,d) => (w*d)/20, info: 'Para arritmias ventriculares. Usar bolo de 2 mg/kg, seguido de CRI.' },
+                { name: 'Dexametasona (2 mg/mL)', dose: 0.5, unit: 'mg/kg', resultUnit: 'mL/kg', calculation: (w,d) => (w*d)/2, info: 'Dosis de shock. Para trauma o anafilaxia.' },
+                { name: 'Furosemida (50 mg/mL)', dose: 2, unit: 'mg/kg', resultUnit: 'mL/kg', calculation: (w,d) => (w*d)/50, info: 'Para edema pulmonar. Dosis de 2-4 mg/kg IV.' },
+            ];
+            const weightRanges = [[1, 5], [5, 10], [10, 20], [20, 40], [40, 60]];
+            const [selectedDrug, setSelectedDrug] = React.useState(emergencyDrugs[0]);
+
+            const calculateTable = (drug) => {
+                return weightRanges.map(range => {
+                    const avgWeight = (range[0] + range[1]) / 2;
+                    const dose = drug.calculation(avgWeight, drug.dose);
+                    return { range: `${range[0]}-${range[1]} kg`, dose: `${dose.toFixed(2)} mL` };
+                });
+            };
+            
+            return (
+                <div className="fixed inset-0 bg-red-900 text-white p-4 font-sans flex flex-col items-center z-50 overflow-y-auto">
+                    <h1 className="text-4xl font-bold mb-4 animate-pulse">MODO EMERGENCIA</h1>
+                    <div className="w-full max-w-2xl bg-slate-800 p-6 rounded-lg">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 mb-6">
+                            {emergencyDrugs.map(drug => (
+                                <button key={drug.name} onClick={() => setSelectedDrug(drug)} className={`p-3 rounded-lg transition-colors ${selectedDrug?.name === drug.name ? 'bg-yellow-500 text-black' : 'bg-red-700 hover:bg-red-600'}`}>
+                                    {drug.name.split('(')[0]}
+                                </button>
+                            ))}
+                        </div>
+                        {selectedDrug && (
+                            <div>
+                                <h2 className="text-2xl font-bold mb-2 text-yellow-400">{selectedDrug.name}</h2>
+                                <p className="mb-4 text-sm font-normal text-gray-300">{selectedDrug.info}</p>
+                                <table className="w-full text-left">
+                                    <thead><tr className="bg-slate-700"><th className="p-2">Rango de Peso</th><th className="p-2">Dosis a Administrar (Promedio)</th></tr></thead>
+                                    <tbody>{calculateTable(selectedDrug).map(row => (<tr key={row.range} className="border-b border-slate-600"><td className="p-2">{row.range}</td><td className="p-2 font-bold">{row.dose}</td></tr>))}</tbody>
+                                </table>
+                            </div>
+                        )}
+                    </div>
+                    <button onClick={onExit} className="mt-6 px-6 py-2 bg-slate-700 rounded-lg hover:bg-slate-600">Salir de Modo Emergencia</button>
+                </div>
+            );
+        };
+        
+        const FluidTherapyCalculator = ({ onClose }) => {
+             const [state, setState] = React.useState({ weight: '', dehydration: 5, maintenance: 60, losses: 0, dripFactor: 20 });
+             const [showInfo, setShowInfo] = React.useState(false);
+
+            const handleChange = e => {
+                setState(prevState => ({ ...prevState, [e.target.name]: e.target.value }));
+            };
+
+            const { weight, dehydration, maintenance, losses, dripFactor } = state;
+            const weightNum = parseFloat(weight) || 0;
+            const dehydrationNum = parseFloat(dehydration) || 0;
+            const maintenanceNum = parseFloat(maintenance) || 0;
+            const lossesNum = parseFloat(losses) || 0;
+            const dripFactorNum = parseFloat(dripFactor) || 0;
+
+            const rehydrationMl = weightNum * dehydrationNum * 10;
+            const maintenanceMl = weightNum * maintenanceNum;
+            const totalMlDay = rehydrationMl + maintenanceMl + lossesNum;
+            const rateMlHr = totalMlDay / 24;
+            const rateGtsMin = (totalMlDay * dripFactorNum) / 1440; // 24 * 60
+            
+            return (
+                <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                    {showInfo && <InfoModal title="Información General de Fluidoterapia" onClose={() => setShowInfo(false)}>
+                        <h3>¿Qué es?</h3>
+                        <p>Es una de las terapias más importantes en medicina veterinaria, usada para corregir deshidratación, mantener la hidratación, reponer electrolitos y administrar medicamentos.</p>
+                        <h3>¿Cuándo usarla?</h3>
+                        <p>En pacientes deshidratados, en shock, anoréxicos, con vómitos/diarrea, durante y después de cirugías, o con enfermedades renales.</p>
+                        <h3>Fórmulas Clave:</h3>
+                        <ul>
+                            <li><strong>Déficit (Rehidratación):</strong> <code>Peso (kg) * % Deshidratación * 10</code></li>
+                            <li><strong>Mantenimiento:</strong> <code>Peso (kg) * Tasa (mL/kg/día)</code></li>
+                              <li><strong>Total 24h:</strong> <code>Déficit + Mantenimiento + Pérdidas</code></li>
+                        </ul>
+                    </InfoModal>}
+                    <div className="bg-slate-900 rounded-lg w-full p-6">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-white">Calculadora de Fluidoterapia</h2>
+                            <div className="flex items-center gap-2">
+                               <button onClick={() => setShowInfo(true)} className="p-2 text-gray-400 hover:text-white"><HelpCircle size={24} /></button>
+                               <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Peso (kg) <InfoTooltip text="Peso actual del paciente en kilogramos." /></label>
+                                <input type="number" name="weight" value={weight} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="flex items-center text-sm font-bold text-gray-300 mb-1">% Deshidratación <InfoTooltip text="Estimación clínica. 5% leve (mucosas pegajosas), 8% moderada (ojos hundidos), 10%+ severa (shock)." /></label>
+                                <input type="number" name="dehydration" value={dehydration} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Mantenimiento (mL/kg/día) <InfoTooltip text="Tasa estándar para cubrir necesidades diarias. Común: 40-60 mL/kg/día." /></label>
+                                <input type="number" name="maintenance" value={maintenance} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Pérdidas Anormales (mL/día) <InfoTooltip text="Estimar volumen perdido por vómito, diarrea, etc., en 24h." /></label>
+                                <input type="number" name="losses" value={losses} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                             <div>
+                                <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Factor Gotero (gts/mL) <InfoTooltip text="Factor de goteo del equipo de venoclisis (micro=60, macro=10, 15, o 20)." /></label>
+                                <select name="dripFactor" value={dripFactor} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md">
+                                    <option value="10">10 (Macrogoteo)</option>
+                                    <option value="15">15 (Macrogoteo)</option>
+                                    <option value="20">20 (Macrogoteo)</option>
+                                    <option value="60">60 (Microgoteo)</option>
+                                </select>
+                            </div>
+                        </div>
+                         {weightNum > 0 && <div className="mt-6 p-4 bg-slate-800 rounded-lg">
+                            <h3 className="text-lg font-bold text-green-400 mb-2">Resultados:</h3>
+                            <p>Rehidratación: <strong>{rehydrationMl.toFixed(2)} mL</strong></p>
+                            <p>Mantenimiento: <strong>{maintenanceMl.toFixed(2)} mL</strong></p>
+                            <p>Pérdidas: <strong>{lossesNum.toFixed(2)} mL</strong></p>
+                            <p className="mt-2 text-xl">Total 24h: <strong className="text-yellow-400">{totalMlDay.toFixed(2)} mL</strong></p>
+                            <p className="mt-2 text-xl">Tasa de infusión: <strong className="text-yellow-400">{rateMlHr.toFixed(2)} mL/hr</strong></p>
+                            <p className="mt-2 text-xl">Gotas: <strong className="text-yellow-400">{rateGtsMin.toFixed(2)} gts/min</strong> (~1 gota cada {rateGtsMin > 0 ? (60/rateGtsMin).toFixed(1) : 0} seg)</p>
+                        </div>}
+                    </div>
+                </div>
+            );
+        };
+        
+        const BSACalculator = ({ onClose }) => {
+            const [state, setState] = React.useState({ weight: '', species: 'Perros' });
+            const [showInfo, setShowInfo] = React.useState(false);
+
+            const handleChange = e => setState(prevState => ({...prevState, [e.target.name]: e.target.value}));
+
+            const weightNum = parseFloat(state.weight) || 0;
+            let bsa = 0;
+            if(weightNum > 0){
+                const k = state.species === 'Perros' ? 10.1 : 10.0;
+                bsa = (k * Math.pow(weightNum * 1000, 2/3)) / 10000;
+            }
+
+            return (
+                 <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                     {showInfo && <InfoModal title="Superficie Corporal (BSA)" onClose={() => setShowInfo(false)}>
+                        <h3>¿Qué es?</h3>
+                        <p>La Superficie Corporal (BSA, por sus siglas en inglés) es una medida del área de superficie del cuerpo. Se utiliza para dosificar fármacos cuya eficacia y toxicidad se correlacionan mejor con el área metabólica que con el peso, como los agentes quimioterapéuticos.</p>
+                        <h3>¿Cuándo usarla?</h3>
+                        <p>Principalmente para calcular dosis de quimioterapia. Algunas dosis de otros fármacos también se expresan en mg/m².</p>
+                        <h3>Fórmula:</h3>
+                        <p><code>BSA (m²) = (K * Peso(g)^(2/3)) / 10,000</code></p>
+                        <ul>
+                            <li><strong>K (Constante):</strong> Varía por especie. Usualmente 10.1 para perros y 10.0 para gatos.</li>
+                        </ul>
+                    </InfoModal>}
+                    <div className="bg-slate-900 rounded-lg w-full max-w-lg p-6">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-white">Calculadora de Superficie Corporal</h2>
+                             <div className="flex items-center gap-2">
+                                <button onClick={() => setShowInfo(true)} className="p-2 text-gray-400 hover:text-white"><HelpCircle size={24} /></button>
+                                <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                            </div>
+                        </div>
+                         <div className="grid grid-cols-2 gap-4">
+                            <div>
+                               <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Especie <InfoTooltip text="La constante 'K' en la fórmula varía ligeramente entre perros y gatos." /></label>
+                               <select name="species" value={state.species} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md">
+                                   <option value="Perros">Perro</option>
+                                   <option value="Gatos">Gato</option>
+                               </select>
+                            </div>
+                            <div>
+                               <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Peso (kg)</label>
+                               <input type="number" name="weight" value={state.weight} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                        </div>
+                        {weightNum > 0 && <div className="mt-6 p-4 bg-slate-800 rounded-lg text-center">
+                            <h3 className="text-lg font-bold text-green-400">BSA Calculada:</h3>
+                            <p className="text-3xl font-bold text-yellow-400">{bsa.toFixed(2)} m²</p>
+                        </div>}
+                    </div>
+                </div>
+            );
+        };
+
+        const CRICalculator = ({ onClose }) => {
+             const [state, setState] = React.useState({ weight: '', dose: '', doseUnit: 'mcg/kg/min', concentration: '', fluidRate: '', fluidVolume: 1000 });
+             const [showInfo, setShowInfo] = React.useState(false);
+
+            const handleChange = e => setState(prevState => ({ ...prevState, [e.target.name]: e.target.value }));
+
+            const weightNum = parseFloat(state.weight) || 0;
+            const doseNum = parseFloat(state.dose) || 0;
+            const concentrationNum = parseFloat(state.concentration) || 0;
+            const fluidRateNum = parseFloat(state.fluidRate) || 0;
+            const fluidVolumeNum = parseFloat(state.fluidVolume) || 0;
+            
+            let drugMlToAdd = 0;
+            if(weightNum > 0 && doseNum > 0 && concentrationNum > 0 && fluidRateNum > 0){
+                let doseInMgKgHr = doseNum;
+                if(state.doseUnit === 'mcg/kg/min') doseInMgKgHr = (doseNum * 60) / 1000;
+                if(state.doseUnit === 'mcg/kg/hr') doseInMgKgHr = doseNum / 1000;
+                
+                const hoursOfFluid = fluidVolumeNum / fluidRateNum;
+                const totalDrugMg = doseInMgKgHr * weightNum * hoursOfFluid;
+                drugMlToAdd = totalDrugMg / concentrationNum;
+            }
+
+            return (
+                 <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                      {showInfo && <InfoModal title="Infusión a Ritmo Constante (CRI)" onClose={() => setShowInfo(false)}>
+                        <h3>¿Qué es?</h3>
+                        <p>Una CRI administra un fármaco de forma continua en los fluidos intravenosos para mantener niveles sanguíneos constantes.</p>
+                          <h3>¿Cuándo usarla?</h3>
+                          <p>Es ideal para analgésicos (lidocaína, fentanilo, ketamina), anestésicos (propofol) o fármacos que requieren un efecto sostenido y controlado.</p>
+                        <h3>Fórmula Clave:</h3>
+                        <p><code>Volumen a añadir (mL) = (Dosis * Peso * Duración Bolsa) / Concentración Fármaco</code></p>
+                        <p>La calculadora convierte todas las unidades para simplificar el proceso.</p>
+                    </InfoModal>}
+                    <div className="bg-slate-900 rounded-lg w-full max-w-2xl p-6">
+                         <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-white">Calculadora de CRI</h2>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => setShowInfo(true)} className="p-2 text-gray-400 hover:text-white"><HelpCircle size={24} /></button>
+                                <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                            <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Peso (kg)</label><input type="number" name="weight" value={state.weight} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" /></div>
+                            <div>
+                                <label className="flex items-center text-sm font-bold text-gray-300 mb-1">Dosis Fármaco</label>
+                                <div className="flex">
+                                    <input type="number" name="dose" value={state.dose} onChange={handleChange} className="w-2/3 p-2 bg-slate-800 rounded-l-md" />
+                                    <select name="doseUnit" value={state.doseUnit} onChange={handleChange} className="w-1/3 p-2 bg-slate-600 rounded-r-md text-xs">
+                                        <option value="mcg/kg/min">mcg/kg/min</option>
+                                        <option value="mcg/kg/hr">mcg/kg/hr</option>
+                                        <option value="mg/kg/hr">mg/kg/hr</option>
+                                    </select>
+                                </div>
+                            </div>
+                             <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Conc. Fármaco (mg/mL)</label><input type="number" name="concentration" value={state.concentration} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" /></div>
+                             <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Tasa Fluidos (mL/hr)</label><input type="number" name="fluidRate" value={state.fluidRate} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" /></div>
+                             <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Volumen Bolsa (mL)</label><input type="number" name="fluidVolume" value={state.fluidVolume} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" /></div>
+                        </div>
+                        {drugMlToAdd > 0 && <div className="mt-6 p-4 bg-slate-800 rounded-lg text-center">
+                            <h3 className="text-lg font-bold text-green-400">Resultado:</h3>
+                            <p className="text-xl">Añadir <strong className="text-yellow-400">{drugMlToAdd.toFixed(2)} mL</strong> de fármaco a la bolsa de <strong>{fluidVolumeNum} mL</strong>.</p>
+                        </div>}
+                    </div>
+                </div>
+            );
+        };
+        
+        const DilutionCalculator = ({ onClose }) => {
+            const [state, setState] = React.useState({ c1: '', v2: '', c2: '' });
+            const [showInfo, setShowInfo] = React.useState(false);
+
+            const handleChange = e => setState(prevState => ({ ...prevState, [e.target.name]: e.target.value }));
+            
+            const c1 = parseFloat(state.c1) || 0;
+            const v2 = parseFloat(state.v2) || 0;
+            const c2 = parseFloat(state.c2) || 0;
+            
+            let v1 = 0;
+            if(c1 > 0 && v2 > 0 && c2 > 0){
+                v1 = (c2 * v2) / c1;
+            }
+
+            return (
+                <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                    {showInfo && <InfoModal title="Diluciones (C1V1=C2V2)" onClose={() => setShowInfo(false)}>
+                        <h3>¿Qué es?</h3>
+                        <p>Esta calculadora utiliza la fórmula universal de dilución para determinar el volumen de una solución madre (V1) necesario para preparar una solución final de una concentración y volumen deseados.</p>
+                        <h3>¿Cuándo usarla?</h3>
+                        <p>Siempre que necesites preparar una solución menos concentrada a partir de una más concentrada. Ej: preparar una solución de Dexametasona al 0.5% a partir de un vial al 2%.</p>
+                        <h3>Fórmula:</h3>
+                        <p><code>V1 = (C2 * V2) / C1</code></p>
+                         <p><strong>Importante:</strong> Las unidades de concentración (C1 y C2) deben ser las mismas (ej. mg/mL, %). Las unidades de volumen (V1 y V2) también serán las mismas.</p>
+                    </InfoModal>}
+                    <div className="bg-slate-900 rounded-lg w-full max-w-lg p-6">
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-2xl font-bold text-white">Calculadora de Diluciones</h2>
+                             <div className="flex items-center gap-2">
+                                <button onClick={() => setShowInfo(true)} className="p-2 text-gray-400 hover:text-white"><HelpCircle size={24} /></button>
+                                <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                            </div>
+                        </div>
+                        <div className="grid grid-cols-1 gap-4">
+                            <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Concentración Inicial (C1)</label><input type="number" name="c1" value={state.c1} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" placeholder="Ej: 50 (mg/mL o %)" /></div>
+                            <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Volumen Final Deseado (V2)</label><input type="number" name="v2" value={state.v2} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" placeholder="Ej: 100 (mL)" /></div>
+                            <div><label className="flex items-center text-sm font-bold text-gray-300 mb-1">Concentración Final Deseada (C2)</label><input type="number" name="c2" value={state.c2} onChange={handleChange} className="w-full p-2 bg-slate-800 rounded-md" placeholder="Ej: 5 (mg/mL o %)" /></div>
+                        </div>
+                        {v1 > 0 && <div className="mt-6 p-4 bg-slate-800 rounded-lg text-center">
+                            <h3 className="text-lg font-bold text-green-400">Resultado (V1):</h3>
+                            <p className="text-xl">Tome <strong className="text-yellow-400">{v1.toFixed(2)} mL</strong> de la solución inicial y aforar a <strong>{v2} mL</strong>.</p>
+                        </div>}
+                    </div>
+                </div>
+            );
+        };
+        
+        const ToolsMenu = ({ onSelect }) => (
+            <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                <h2 className="text-xl font-bold mb-4 text-white text-center">Herramientas y Referencias</h2>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                    <button onClick={() => onSelect('addMed')} className="flex flex-col items-center p-4 bg-teal-800/50 rounded-lg hover:bg-teal-700/50 transition-colors col-span-2 md:col-span-4"><FlaskConical className="mb-2 text-teal-400"/>Añadir Fármaco (IA)</button>
+                    <button onClick={() => onSelect('vademecum')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><BookOpen className="mb-2 text-blue-400"/>Vademécum</button>
+                    <button onClick={() => onSelect('constants')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><HeartPulse className="mb-2 text-red-400"/>Constantes</button>
+                    <button onClick={() => onSelect('timer')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><Clock className="mb-2 text-orange-400"/>Temporizador</button>
+                    <button onClick={() => onSelect('fluid')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><Droplet className="mb-2 text-cyan-400"/>Fluidoterapia</button>
+                    <button onClick={() => onSelect('bsa')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><Square className="mb-2 text-purple-400"/>Sup. Corporal</button>
+                    <button onClick={() => onSelect('cri')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><Calculator className="mb-2 text-green-400"/>CRI</button>
+                    <button onClick={() => onSelect('dilution')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors"><Beaker className="mb-2 text-indigo-400"/>Diluciones</button>
+                    <button onClick={() => onSelect('protocols')} className="flex flex-col items-center p-4 bg-slate-800 rounded-lg hover:bg-slate-700 transition-colors col-span-2"><Siren className="mb-2 text-yellow-400"/>Protocolos Anest.</button>
+                </div>
+            </div>
+        );
+
+        const VademecumView = ({ allMedications, favorites, toggleFavorite, onClose, handleUpdateUserMed, onGetMoreInfo, showNotification }) => {
+            const [searchTerm, setSearchTerm] = React.useState('');
+            const [selectedMed, setSelectedMed] = React.useState(null);
+            const [editingMed, setEditingMed] = React.useState(null);
+
+            const isDirty = React.useMemo(() => {
+                if (!selectedMed || !editingMed) return false;
+                return JSON.stringify(selectedMed) !== JSON.stringify(editingMed);
+            }, [selectedMed, editingMed]);
+
+            const handleSelectMed = (med) => {
+                setSelectedMed(med);
+                setEditingMed(JSON.parse(JSON.stringify(med))); // Deep copy for editing
+            };
+            
+            const handleBackToList = () => {
+                setSelectedMed(null);
+                setEditingMed(null);
+            }
+            
+            const handleCommercialNamesChange = (e) => {
+                const names = e.target.value.split(',').map(name => name.trim());
+                setEditingMed(prev => ({...prev, commercial_names: names}));
+            };
+
+            const handleSave = () => {
+                handleUpdateUserMed(editingMed);
+                setSelectedMed(editingMed);
+                showNotification(`Nombres comerciales de "${editingMed.name}" actualizados.`, 'success');
+            };
+
+            const filteredMeds = React.useMemo(() => {
+                const allFiltered = allMedications.filter(m => {
+                    const hasDoses = m.doses && Object.keys(m.doses).length > 0;
+                    const matchesSearch = searchTerm === '' || 
+                                          m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                          (m.commercial_names && m.commercial_names.some(name => name.toLowerCase().includes(searchTerm.toLowerCase())));
+                    return hasDoses && matchesSearch;
+                });
+                
+                return allFiltered.sort((a, b) => {
+                    const aIsFav = favorites.includes(a.name);
+                    const bIsFav = favorites.includes(b.name);
+                    if (aIsFav && !bIsFav) return -1;
+                    if (!aIsFav && bIsFav) return 1;
+                    return a.name.localeCompare(b.name);
+                });
+            }, [searchTerm, favorites, allMedications]);
+
+
+            if(editingMed){
+                 return (
+                    <div className="bg-slate-900 p-4 md:p-6 rounded-3xl shadow-xl border border-gray-700">
+                        <div className="flex justify-between items-center mb-4">
+                             <h2 className="text-xl md:text-2xl font-bold text-white truncate">{editingMed.name}</h2>
+                             <button onClick={handleBackToList} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                        </div>
+                        <div className="space-y-3 max-h-[70vh] overflow-y-auto pr-2">
+                            <div>
+                                <label className="block text-sm font-bold text-gray-400 mb-1">Nombres Comerciales (separados por coma)</label>
+                                <input 
+                                    type="text" 
+                                    value={(editingMed.commercial_names || []).join(', ')} 
+                                    onChange={handleCommercialNamesChange}
+                                    className="w-full px-3 py-2 text-gray-200 bg-slate-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal"
+                                />
+                            </div>
+
+                            {isDirty && (
+                               <button onClick={handleSave} className="w-full mt-2 py-2 px-4 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold flex items-center justify-center gap-2">
+                                   <Save size={16} /> Guardar Cambios
+                               </button>
+                           )}
+
+                           <MedicationInfo medData={editingMed} />
+                           <button onClick={() => onGetMoreInfo(editingMed)} className="w-full mt-4 py-2 px-4 bg-indigo-600 hover:bg-indigo-700 rounded-lg text-white font-bold">Más Información (con Gemini)</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                 <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-2xl font-bold text-white">Vademécum de Consulta Rápida</h2>
+                        <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                    </div>
+                    <input type="text" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} placeholder="Buscar medicamento..." className="w-full px-3 py-2 mb-4 text-gray-200 bg-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"/>
+                    <ul className="space-y-2 max-h-[60vh] overflow-y-auto">
+                        {filteredMeds.length > 0 ? filteredMeds.map(med => {
+                             const isFav = favorites.includes(med.name);
+                             return (
+                                <li key={med.name} onClick={() => handleSelectMed(med)} className={`flex justify-between items-center p-3 rounded-lg cursor-pointer hover:bg-slate-700 ${isFav ? 'bg-slate-800/50 border border-yellow-500/50' : 'bg-slate-800'}`}>
+                                    <div>
+                                      <p className="font-bold">{med.name}</p>
+                                      <p className="text-xs text-gray-400">{(med.commercial_names && med.commercial_names.join(', ')) || 'N/A'}</p>
+                                    </div>
+                                    <button onClick={(e) => { e.stopPropagation(); toggleFavorite(med.name); }} className={`p-1 rounded-full hover:bg-slate-600 ${isFav ? 'text-yellow-400' : 'text-gray-500'}`}>
+                                        <Star size={16} fill={isFav ? 'currentColor' : 'none'} />
+                                    </button>
+                                </li>
+                            )
+                        }) : <li className="px-4 py-2 text-gray-400">No hay coincidencias.</li>}
+                    </ul>
+                 </div>
+            );
+        };
+
+        const PhysiologicalConstantsView = ({ onClose }) => (
+             <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-2xl font-bold text-white">Constantes Fisiológicas</h2>
+                    <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                </div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                        <thead className="bg-slate-800 text-gray-300">
+                            <tr>
+                                <th className="p-3">Especie</th>
+                                <th className="p-3">Temp °C</th>
+                                <th className="p-3">FC (lpm)</th>
+                                <th className="p-3">FR (rpm)</th>
+                                <th className="p-3">PAS (mmHg)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {Object.entries(physiologicalConstants).map(([species, values]) => (
+                                <tr key={species} className="border-b border-slate-700">
+                                    <td className="p-3 font-bold">{species}</td>
+                                    <td className="p-3">{values['Temp °C']}</td>
+                                    <td className="p-3">{values['FC (lpm)']}</td>
+                                    <td className="p-3">{values['FR (rpm)']}</td>
+                                    <td className="p-3">{values['PAS (mmHg)']}</td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+             </div>
+        );
+
+        const AnestheticProtocolsView = ({ onClose }) => (
+            <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-2xl font-bold text-white">Protocolos Anestésicos Sugeridos</h2>
+                    <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                </div>
+                <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+                    {anestheticProtocols.map(proto => (
+                        <div key={proto.name} className="bg-slate-800 p-4 rounded-lg">
+                            <h3 className="font-bold text-lg text-blue-300">{proto.name}</h3>
+                            <p className="text-sm text-gray-400 mb-2">Especie: {proto.species} | ASA: {proto.asa}</p>
+                            <p><strong>Premedicación:</strong> {proto.premed}</p>
+                            <p><strong>Inducción:</strong> {proto.induction}</p>
+                            <p><strong>Mantenimiento:</strong> {proto.maintenance}</p>
+                            <p className="text-xs text-gray-300 mt-2 bg-slate-700 p-2 rounded"><em>Nota: {proto.notes}</em></p>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+        
+        const AddMedicationAI = ({ onSave, onClose }) => {
+            const [step, setStep] = React.useState('input'); // input, loading, confirm
+            const [userInput, setUserInput] = React.useState({ name: '', pharma: '', concentration: '', drug: ''});
+            const [fetchedData, setFetchedData] = React.useState(null);
+
+            const handleInputChange = (e) => {
+                setUserInput({...userInput, [e.target.name]: e.target.value});
+            };
+            
+            const handleSearch = () => {
+                if(!userInput.name || !userInput.concentration || !userInput.drug){
+                    alert("Por favor, introduce Nombre, Principio Activo y Concentración.");
+                    return;
+                }
+                setStep('loading');
+                // --- AI SIMULATION ---
+                setTimeout(() => {
+                    const newMedData = {
+                        name: `${userInput.name} (${userInput.drug})`,
+                        commercial_names: [userInput.name],
+                        doses: {},
+                        functions: "Información no encontrada por IA.",
+                        recommendations: "Información no encontrada por IA.",
+                        precautions: "Información no encontrada por IA.",
+                        contraindications: "Información no encontrada por IA.",
+                        interactions: {summary: "", specifics:[]},
+                        substitutes: []
+                    };
+                    setFetchedData(newMedData);
+                    setStep('confirm');
+                }, 1500);
+            };
+
+            const handleSave = () => {
+                onSave(fetchedData);
+            }
+
+            return (
+                 <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-2xl font-bold text-white">Añadir Fármaco con IA (Simulado)</h2>
+                        <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                    </div>
+                    
+                    {step === 'input' && (
+                        <div className="space-y-4">
+                            <p className="text-sm text-gray-300">Introduce los datos del medicamento. La IA buscará la información técnica para rellenar los campos por ti.</p>
+                            <div>
+                                <label className="block text-sm font-bold text-gray-400 mb-1">Nombre Comercial</label>
+                                <input type="text" name="name" value={userInput.name} onChange={handleInputChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-gray-400 mb-1">Principio Activo (Fármaco)</label>
+                                <input type="text" name="drug" value={userInput.drug} onChange={handleInputChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-gray-400 mb-1">Farmacéutica (Opcional)</label>
+                                <input type="text" name="pharma" value={userInput.pharma} onChange={handleInputChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <div>
+                                <label className="block text-sm font-bold text-gray-400 mb-1">Concentración (ej. 50 mg/mL, 2%)</label>
+                                <input type="text" name="concentration" value={userInput.concentration} onChange={handleInputChange} className="w-full p-2 bg-slate-800 rounded-md" />
+                            </div>
+                            <button onClick={handleSearch} className="w-full py-2 px-4 bg-blue-600 hover:bg-blue-700 rounded-lg text-white font-bold">Buscar Información</button>
+                        </div>
+                    )}
+
+                    {step === 'loading' && (
+                         <div className="text-center p-8">
+                            <p className="text-lg animate-pulse">Buscando en bases de datos...</p>
+                        </div>
+                    )}
+
+                    {step === 'confirm' && fetchedData && (
+                        <div className="space-y-4">
+                            <h3 className="text-lg font-bold">Información Encontrada (Editable)</h3>
+                            <div className="ai-response-container">
+                                <pre>{JSON.stringify(fetchedData, null, 2)}</pre>
+                            </div>
+                            <div className="flex justify-between gap-4">
+                                <button onClick={() => setStep('input')} className="w-full py-2 px-4 bg-gray-500 hover:bg-gray-600 rounded-lg text-white font-bold">Volver</button>
+                                <button onClick={handleSave} className="w-full py-2 px-4 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold">Aceptar y Guardar</button>
+                            </div>
+                        </div>
+                    )}
+                 </div>
+            );
+        };
+        
+        const TimerTool = ({ onClose }) => {
+            const [time, setTime] = React.useState(0);
+            const [isActive, setIsActive] = React.useState(false);
+            const [laps, setLaps] = React.useState([]);
+            const countRef = React.useRef(null);
+
+            const handleStart = () => {
+                setIsActive(!isActive);
+            };
+
+            const handleReset = () => {
+                setIsActive(false);
+                clearInterval(countRef.current);
+                setTime(0);
+                setLaps([]);
+            };
+
+            const handleLap = () => {
+                if (isActive) {
+                    setLaps(prevLaps => [...prevLaps, time]);
+                }
+            };
+
+            React.useEffect(() => {
+                if (isActive) {
+                    countRef.current = setInterval(() => {
+                        setTime((prevTime) => prevTime + 1);
+                    }, 1000);
+                } else {
+                    clearInterval(countRef.current);
+                }
+                return () => clearInterval(countRef.current);
+            }, [isActive]);
+
+            const formatTime = (timeInSeconds) => {
+                const hours = Math.floor(timeInSeconds / 3600);
+                const minutes = Math.floor((timeInSeconds % 3600) / 60);
+                const seconds = timeInSeconds % 60;
+                return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+            };
+
+            return (
+                 <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                    <div className="flex justify-between items-center mb-4">
+                        <h2 className="text-2xl font-bold text-white">Temporizador</h2>
+                        <button onClick={onClose} className="p-2 text-gray-400 hover:text-white"><X size={24} /></button>
+                    </div>
+                    <div className="text-center">
+                        <p className="text-6xl font-mono text-white mb-6">{formatTime(time)}</p>
+                        <div className="flex justify-center gap-4 mb-6">
+                            <button onClick={handleStart} className={`px-6 py-3 rounded-full font-bold text-lg ${isActive ? 'bg-yellow-500 text-black' : 'bg-green-600 text-white'}`}>{isActive ? 'Pausar' : 'Iniciar'}</button>
+                            <button onClick={handleLap} className="px-6 py-3 rounded-full font-bold text-lg bg-blue-600 text-white disabled:opacity-50" disabled={!isActive}>Vuelta</button>
+                            <button onClick={handleReset} className="px-6 py-3 rounded-full font-bold text-lg bg-red-600 text-white">Reiniciar</button>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto space-y-2 text-left">
+                            {laps.map((lap, index) => (
+                                <div key={index} className="flex justify-between bg-slate-800 p-2 rounded">
+                                    <span className="text-gray-400">Vuelta {index + 1}</span>
+                                    <span className="font-mono text-white">{formatTime(lap)}</span>
+                                </div>
+                            )).reverse()}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        // --- Main App Component ---
+        const DosisApp = () => {
+          // --- STATE MANAGEMENT ---
+          const [activeView, setActiveView] = React.useState('calculator');
+          const [patient, setPatient] = React.useState({ name: '', species: '', subSpecies: '', weight: '' });
+          const [medications, setMedications] = React.useState([]);
+          const [dosisHistory, setDosisHistory] = React.useState([]);
+          const [showHistory, setShowHistory] = React.useState(false);
+          const [speciesList, setSpeciesList] = React.useState([]);
+          const [notification, setNotification] = React.useState(null);
+          const [interactionWarning, setInteractionWarning] = React.useState(null);
+          const [userAddedMeds, setUserAddedMeds] = React.useState(() => {
+                try {
+                    const saved = localStorage.getItem('dosisPerronasUserMeds');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) {
+                    return [];
+                }
+            });
+            
+          const [showAiModal, setShowAiModal] = React.useState(false);
+          const [currentMedForAi, setCurrentMedForAi] = React.useState(null);
+          
+          const handleGetMoreInfo = (med) => {
+              setCurrentMedForAi(med);
+              setShowAiModal(true);
+          }
+
+
+            const allMedications = React.useMemo(() => {
+                return [...initialMedications, ...userAddedMeds].sort((a, b) => a.name.localeCompare(b.name));
+            }, [userAddedMeds]);
+
+            React.useEffect(() => {
+                localStorage.setItem('dosisPerronasUserMeds', JSON.stringify(userAddedMeds));
+            }, [userAddedMeds]);
+            
+            const handleUpdateUserMed = (updatedMed) => {
+                setUserAddedMeds(prevMeds => {
+                    const isInitialMed = initialMedications.some(m => m.name === updatedMed.name);
+                    const existingIndex = prevMeds.findIndex(med => med.name === updatedMed.name);
+                    if (existingIndex > -1) {
+                        const newMeds = [...prevMeds];
+                        newMeds[existingIndex] = updatedMed;
+                        return newMeds;
+                    } else if (isInitialMed) {
+                         return [...prevMeds, updatedMed];
+                    }
+                     return [...prevMeds, updatedMed];
+                });
+                showNotification(`Cambios en "${updatedMed.name.split('(')[0]}" guardados en tu vademécum.`, 'success');
+            };
+
+            const handleAddNewMedication = (newMed) => {
+                setUserAddedMeds(prev => [...prev, newMed]);
+                showNotification(`${newMed.name} ha sido añadido a tu vademécum personal.`, 'success');
+                setActiveView('calculator');
+            };
+          
+          const [favorites, setFavorites] = React.useState(() => {
+                try {
+                    const saved = localStorage.getItem('dosisPerronasFavorites');
+                    return saved ? JSON.parse(saved) : [];
+                } catch (e) {
+                    return [];
+                }
+            });
+
+            React.useEffect(() => {
+                localStorage.setItem('dosisPerronasFavorites', JSON.stringify(favorites));
+            }, [favorites]);
+
+            const toggleFavorite = (medName) => {
+                let newFavorites;
+                if (favorites.includes(medName)) {
+                    newFavorites = favorites.filter(name => name !== medName);
+                } else {
+                    newFavorites = [...favorites, medName];
+                }
+                setFavorites(newFavorites);
+                showNotification(favorites.includes(medName) ? `${medName.split('(')[0].trim()} eliminado de favoritos.` : `${medName.split('(')[0].trim()} añadido a favoritos.`, 'info');
+            };
+
+            const addMedication = React.useCallback(() => {
+             setMedications(prevMeds => [...prevMeds, { id: Date.now(), selectedMed: null, selectedPresentation: '', concentration: '', selectedPurposeIndex: 0, customRecDose: '', selectedDoseType: null }]);
+            }, []);
+
+          React.useEffect(() => {
+              addMedication();
+              try {
+                  const savedHistory = localStorage.getItem('dosisPerronasHistory');
+                  if (savedHistory) { setDosisHistory(JSON.parse(savedHistory)); }
+              } catch (error) { console.error("Error loading history:", error); }
+          }, []);
+
+          React.useEffect(() => {
+              try {
+                  localStorage.setItem('dosisPerronasHistory', JSON.stringify(dosisHistory));
+              } catch (error) { console.error("Error saving history:", error); }
+          }, [dosisHistory]);
+          
+          const speciesEmojis = { 'Perros': '🐶', 'Gatos': '🐱', 'Bovinos': '🐮', 'Equinos': '🐴', 'Ovinos': '🐑', 'Caprinos': '🐐', 'Porcinos': '🐷', 'Aves': '🐔', 'Conejos': '🐰', 'Reptiles': '🐍', 'Anfibios': '🐸', 'Exóticos': '🐾', 'Pequeños Mamíferos': '🐹', 'Hurones': '🐾'};
+          
+          React.useEffect(() => {
+            const rawSpecies = allMedications.flatMap(m => m.doses ? Object.keys(m.doses) : []);
+            const unifiedSpecies = new Set(rawSpecies);
+            
+            const speciesOrder = ['Perros', 'Gatos', 'Equinos', 'Bovinos', 'Porcinos', 'Ovinos', 'Caprinos', 'Conejos', 'Aves', 'Reptiles', 'Anfibios'];
+            const sortedSpecies = speciesOrder.filter(s => unifiedSpecies.has(s));
+            setSpeciesList(sortedSpecies);
+          }, [allMedications]);
+
+          const exoticSpeciesMap = React.useMemo(() => {
+               const map = {};
+               allMedications.forEach(med => {
+                   if (med.doses) {
+                       Object.keys(med.doses).forEach(speciesKey => {
+                           const categoryMatch = speciesKey.match(/Aves|Reptiles|Conejos|Anfibios|Pequeños Mamíferos/);
+                           if (categoryMatch) {
+                               const category = categoryMatch[0];
+                               if (!map[category]) map[category] = new Set();
+                               if (Array.isArray(med.doses[speciesKey])) {
+                                   med.doses[speciesKey].forEach(speciesDose => {
+                                       if (speciesDose.species) {
+                                         map[category].add(speciesDose.species);
+                                       } else {
+                                         if(!map[category].has(speciesKey)) map[category].add(speciesKey);
+                                       }
+                                   });
+                               }
+                           }
+                       });
+                   }
+               });
+              Object.keys(map).forEach(category => {
+                   map[category] = Array.from(map[category]).sort();
+               });
+             return map;
+           }, [allMedications]);
+
+        React.useEffect(() => {
+            setInteractionWarning(null);
+        }, [medications]);
+
+            const showNotification = (message, type = 'info') => {
+                setNotification({ message, type, id: Date.now() });
+                setTimeout(() => setNotification(null), 3000);
+            };
+            
+             const getDoseOptions = (med, species, subSpecies) => {
+                 if (!med || !med.doses) return [];
+                 if (med.doses[species] && !subSpecies) {
+                     return med.doses[species];
+                 }
+                 if (subSpecies && med.doses[species]) {
+                      return med.doses[species].filter(d => d.species === subSpecies);
+                 } else if (subSpecies && med.doses[subSpecies]){
+                      return med.doses[subSpecies];
+                 }
+                 return [];
+             };
+
+            const handlePatientChange = (e) => {
+                const { name, value } = e.target;
+                 if (name === 'species' && value !== patient.species) {
+                      setMedications([{ id: Date.now(), selectedMed: null, selectedPresentation: '', concentration: '', selectedPurposeIndex: 0, customRecDose: '', selectedDoseType: null }]); 
+                      setPatient(prev => ({ ...prev, species: value, subSpecies: '' }));
+                 } else {
+                     setPatient(prev => ({ ...prev, [name]: value }));
+                 }
+            };
+
+            const handleMedicationUpdate = (index, field, value) => {
+                   const updatedMedications = [...medications];
+                   let currentMed = { ...updatedMedications[index] };
+
+                   if (field === 'select') {
+                       currentMed.selectedMed = value;
+                       currentMed.selectedPurposeIndex = 0;
+                       currentMed.selectedDoseType = null; 
+
+                       if(value && value.concentration){
+                           const firstPresentation = Object.keys(value.concentration)[0];
+                           currentMed.selectedPresentation = firstPresentation;
+                           currentMed.concentration = value.concentration[firstPresentation].match(/(\d+\.?\d*)/)?.[0] || '';
+                       } else {
+                           currentMed.selectedPresentation = '';
+                           currentMed.concentration = '';
+                       }
+
+                       const doseOptions = getDoseOptions(value, patient.species, patient.subSpecies);
+                       const firstDose = doseOptions && doseOptions.length > 0 ? doseOptions[0] : null;
+                       currentMed.customRecDose = (firstDose && firstDose.dose_range_rec !== undefined) ? firstDose.dose_range_rec : '';
+                   
+                   } else if (field === 'selectedPresentation') {
+                       currentMed.selectedPresentation = value;
+                       currentMed.concentration = currentMed.selectedMed.concentration[value].match(/(\d+\.?\d*)/)?.[0] || '';
+
+                   } else if (field === 'concentration') {
+                       currentMed.concentration = value;
+                   } else if (field === 'selectedPurposeIndex') {
+                       currentMed.selectedPurposeIndex = value;
+                       const doseOptions = getDoseOptions(currentMed.selectedMed, patient.species, patient.subSpecies);
+                       const newDose = doseOptions && doseOptions[value];
+                       currentMed.customRecDose = (newDose && newDose.dose_range_rec !== undefined) ? newDose.dose_range_rec : '';
+                       currentMed.selectedDoseType = null;
+                   } else if (field === 'customRecDose') {
+                       currentMed.customRecDose = value;
+                   } else if (field === 'selectedDoseType') {
+                       currentMed.selectedDoseType = value;
+                   }
+                   
+                   updatedMedications[index] = currentMed;
+                   setMedications(updatedMedications);
+               };
+
+            const handleReset = React.useCallback(() => {
+                setPatient({ name: '', species: '', subSpecies: '', weight: '' });
+                setMedications([]);
+                addMedication();
+                showNotification('Formulario reiniciado.', 'info');
+            }, [addMedication]);
+            
+            const handleSaveDosis = () => {
+                if (!patient.name || !patient.species || !patient.weight || medications.every(m => !m.selectedMed)) {
+                    showNotification("Complete la información del paciente y seleccione al menos un medicamento.", "error");
+                    return;
+                }
+                const newEntry = {
+                    id: Date.now(),
+                    patient: {...patient},
+                    medications: medications.filter(m => m.selectedMed).map(m => {
+                        const doseOptions = getDoseOptions(m.selectedMed, patient.species, patient.subSpecies);
+                        const selectedPurpose = doseOptions[m.selectedPurposeIndex];
+                        return {
+                            name: m.selectedMed.name,
+                            concentration: m.concentration,
+                            purpose: selectedPurpose ? selectedPurpose.purpose : 'N/A',
+                            customRecDose: m.customRecDose,
+                            selectedDoseType: m.selectedDoseType
+                        }
+                    }),
+                    timestamp: new Date().toLocaleString()
+                };
+                setDosisHistory(prev => [newEntry, ...prev.slice(0, 14)]);
+                showNotification(`Dosis para ${patient.name} guardada en el historial.`, 'success');
+            };
+            
+            const handleRestoreDosis = (entry) => {
+                setPatient(entry.patient);
+                setMedications(entry.medications.map(m_hist => {
+                    const fullMedData = allMedications.find(m => m.name === m_hist.name);
+                    const doseOptions = getDoseOptions(fullMedData, entry.patient.species, entry.patient.subSpecies);
+                    const purposeIndex = doseOptions.findIndex(d => d.purpose === m_hist.purpose);
+
+                    return {
+                        id: Date.now() + Math.random(),
+                        selectedMed: fullMedData,
+                        concentration: m_hist.concentration,
+                        selectedPurposeIndex: purposeIndex !== -1 ? purposeIndex : 0,
+                        customRecDose: m_hist.customRecDose,
+                        selectedDoseType: m_hist.selectedDoseType || null
+                    }
+                }));
+                setShowHistory(false);
+                showNotification(`Datos de ${entry.patient.name} restaurados.`, 'info');
+            };
+
+             const handleGeneratePdf = () => {
+                if (!patient.name || !patient.species || !patient.weight || medications.every(m => !m.selectedMed)) {
+                    showNotification("Complete todos los campos para generar el PDF.", "error");
+                    return;
+                }
+                 if (medications.some(m => m.selectedMed && m.selectedDoseType === null)) {
+                     showNotification("Por favor, seleccione una dosis (Mín, Rec, o Máx) para cada medicamento antes de generar el PDF.", "error");
+                     return;
+                 }
+
+                const { jsPDF } = window.jspdf;
+                if (!jsPDF) {
+                    showNotification("Error: la librería jsPDF no está disponible.", "error");
+                    return;
+                }
+
+                const doc = new jsPDF();
+                
+                const pageMargin = 15;
+                const sidebarWidth = 60;
+                const mainContentX = sidebarWidth + 5;
+                const pageWidth = doc.internal.pageSize.getWidth();
+                const pageHeight = doc.internal.pageSize.getHeight();
+                const usableWidth = pageWidth - mainContentX - pageMargin;
+                let cursorY = 20;
+
+                // --- Sidebar (Left Column) ---
+                doc.setFillColor(241, 245, 249); // slate-100
+                doc.rect(0, 0, sidebarWidth, pageHeight, 'F');
+
+                // Clinic Info (Placeholder)
+                doc.setFontSize(14);
+                doc.setFont("helvetica", "bold");
+                doc.setTextColor(23, 37, 84); // slate-900
+                doc.text("Tu Clínica Veterinaria", pageMargin, cursorY);
+                cursorY += 8;
+                doc.setFontSize(9);
+                doc.setFont("helvetica", "normal");
+                doc.setTextColor(71, 85, 105); // slate-600
+                doc.text("Calle Falsa 123, Colonia Centro", pageMargin, cursorY);
+                cursorY += 5;
+                doc.text("Ciudad, Estado, CP 12345", pageMargin, cursorY);
+                cursorY += 5;
+                doc.text("Tel: (55) 1234-5678", pageMargin, cursorY);
+                cursorY += 15;
+
+                // Patient Info
+                doc.setFontSize(12);
+                doc.setFont("helvetica", "bold");
+                doc.setTextColor(23, 37, 84);
+                doc.text("Paciente", pageMargin, cursorY);
+                cursorY += 8;
+                doc.setLineWidth(0.2);
+                doc.setDrawColor(203, 213, 225); // slate-300
+                doc.line(pageMargin, cursorY - 3, sidebarWidth - pageMargin, cursorY - 3);
+
+                doc.setFontSize(10);
+                doc.setFont("helvetica", "normal");
+                doc.setTextColor(71, 85, 105);
+                doc.text(`Nombre: ${patient.name || 'N/A'}`, pageMargin, cursorY);
+                cursorY += 7;
+                doc.text(`Especie: ${patient.species || 'N/A'}${patient.subSpecies ? ` (${patient.subSpecies})` : ''}`, pageMargin, cursorY);
+                cursorY += 7;
+                doc.text(`Peso: ${patient.weight || 'N/A'} kg`, pageMargin, cursorY);
+                cursorY += 15;
+
+                // --- Main Content (Right Column) ---
+                cursorY = 20; // Reset Y for the main column
+                doc.setFontSize(22);
+                doc.setFont("helvetica", "bold");
+                doc.setTextColor(23, 37, 84);
+                doc.text("Receta Médica", mainContentX, cursorY);
+                cursorY += 8;
+                doc.setFontSize(10);
+                doc.setFont("helvetica", "normal");
+                doc.setTextColor(100, 116, 139);
+                doc.text(`Fecha: ${new Date().toLocaleDateString()}`, mainContentX, cursorY);
+                cursorY += 15;
+                
+                  medications.filter(m => m.selectedMed && m.selectedDoseType).forEach((med, index) => {
+                      const medData = m.selectedMed;
+                      
+                      const doseOptions = getDoseOptions(medData, patient.species, patient.subSpecies);
+                      const currentPurposeData = doseOptions[m.selectedPurposeIndex] || {};
+                       
+                      const calculateDose = (purpose, weight, med) => {
+                          if (!purpose || !weight || !med.concentration || !purpose.unit) return null;
+                          const concentrationValStr = med.selectedMed.concentration[med.selectedPresentation];
+                          const concentration = parseFloat(concentrationValStr.match(/(\d+\.?\d*)/)?.[0]);
+
+                          const weightNum = parseFloat(weight);
+                          if (isNaN(concentration) || concentration <= 0 || isNaN(weightNum) || weightNum <= 0) return null;
+
+                          // Helper to parse unit string and get a multiplier to convert to mg
+                          const parseUnitString = (unitStr) => {
+                              const lowerStr = unitStr.toLowerCase();
+                              if (lowerStr.includes('mcg')) return { multiplier: 0.001, unit: 'mcg' };
+                              if (lowerStr.includes('ui')) return { multiplier: 1, unit: 'UI' };
+                              if (lowerStr.includes('g')) return { multiplier: 1000, unit: 'g' };
+                              return { multiplier: 1, unit: 'mg' };
+                          }
+                          
+                          const doseUnitInfo = parseUnitString(purpose.unit);
+                          const concUnitInfo = parseUnitString(concentrationValStr);
+
+                          const calc = (doseVal) => {
+                              if (doseVal === null || typeof doseVal === 'undefined' || isNaN(doseVal)) return { value: 'N/A', unit: '', formula: '' };
+                              let totalDoseAmount;
+                              let formula = '';
+                              
+                              if (purpose.unit.includes('/kg')) {
+                                  totalDoseAmount = doseVal * weightNum;
+                                  formula = `(${doseVal} ${purpose.unit.split('/')[0]} * ${weightNum}kg)`;
+                              } else if (purpose.unit.includes('/perro') || purpose.unit.includes('/gato') || purpose.unit.includes('por gato') || purpose.unit.includes('/hurón')) {
+                                  totalDoseAmount = doseVal;
+                                  formula = `${doseVal} ${purpose.unit}`;
+                              } else {
+                                  return { value: doseVal, unit: purpose.unit.split(' ')[0], formula: 'Dosis directa' };
+                              }
+
+                              let finalUnit = "mL";
+                              if(concentrationValStr.toLowerCase().includes("tableta")){ finalUnit = "tabletas"; } 
+                              else if (concentrationValStr.toLowerCase().includes("cápsula")){ finalUnit = "cápsulas"; }
+                              else if (concentrationValStr.toLowerCase().includes("parche")){ finalUnit = "parche(s)"; }
+
+                              // Normalize dose and concentration to a base unit (e.g., mg) for calculation
+                              const doseInBaseUnits = totalDoseAmount * doseUnitInfo.multiplier;
+                              const concInBaseUnits = concentrationNum * concUnitInfo.multiplier;
+
+                              const finalValue = doseInBaseUnits / concInBaseUnits;
+                              
+                              return {
+                                  value: finalValue % 1 === 0 ? finalValue : finalValue.toFixed(2), // FIX: Change to 2 decimal places
+                                  unit: finalUnit,
+                                  formula: `${formula} / ${concentrationValStr}`
+                              };
+                          };
+                          return { min: calc(purpose.dose_range_min), rec: calc(purpose.dose_range_rec), max: calc(purpose.dose_range_max) };
+                      };
+
+                      const calculatedDoses = calculateDose({ ...currentPurposeData, dose_range_rec: parseFloat(med.customRecDose) }, patient.weight, med);
+                      const selectedDoseData = calculatedDoses[med.selectedDoseType];
+                      
+                      if (cursorY > pageHeight - 60) { // Check for page break
+                          doc.addPage();
+                          // Redraw sidebar on new page
+                          doc.setFillColor(241, 245, 249); // slate-100
+                          doc.rect(0, 0, sidebarWidth, pageHeight, 'F');
+                          cursorY = 20; // Reset cursor
+                      }
+
+                      doc.setFontSize(14);
+                      doc.setFont("helvetica", "bold");
+                      doc.setTextColor(23, 37, 84);
+                      doc.text(`${index + 1}. ${medData.name}`, mainContentX, cursorY);
+                      cursorY += 8;
+
+                      doc.setFontSize(11);
+                      doc.setFont("helvetica", "bold");
+                      doc.setTextColor(59, 130, 246);
+                      doc.text("Dosis:", mainContentX, cursorY);
+                      doc.setFont("helvetica", "normal");
+                      doc.setTextColor(45, 55, 72);
+                      doc.text(`${selectedDoseData.value} ${selectedDoseData.unit}`, mainContentX + 15, cursorY);
+                      cursorY += 7;
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setTextColor(59, 130, 246);
+                      doc.text("Vía:", mainContentX, cursorY);
+                      doc.setFont("helvetica", "normal");
+                      doc.setTextColor(45, 55, 72);
+                      doc.text(`${currentPurposeData.route || 'N/A'}`, mainContentX + 10, cursorY);
+                      cursorY += 7;
+
+                      doc.setFont("helvetica", "bold");
+                      doc.setTextColor(59, 130, 246);
+                      doc.text("Frecuencia:", mainContentX, cursorY);
+                      doc.setFont("helvetica", "normal");
+                      doc.setTextColor(45, 55, 72);
+                      doc.text(`${currentPurposeData.frequency || 'N/A'}`, mainContentX + 25, cursorY);
+                      cursorY += 7;
+
+                      doc.setFontSize(8);
+                      doc.setTextColor(100, 116, 139); // slate-500
+                      doc.text(`Cálculo: ${selectedDoseData.formula}`, mainContentX, cursorY);
+                      cursorY += 10;
+                      
+                      if (medData.recommendations) {
+                          doc.setFont("helvetica", "bold");
+                          doc.setTextColor(59, 130, 246);
+                          doc.text("Indicaciones:", mainContentX, cursorY);
+                          cursorY += 6;
+                          doc.setFontSize(10);
+                          doc.setFont("helvetica", "normal");
+                          doc.setTextColor(71, 85, 105);
+                          const recommendations = doc.splitTextToSize(medData.recommendations, usableWidth);
+                          doc.text(recommendations, mainContentX, cursorY);
+                          cursorY += recommendations.length * 4 + 5;
+                      }
+                      
+                      doc.setLineWidth(0.1);
+                      doc.setDrawColor(203, 213, 225);
+                      doc.line(mainContentX, cursorY, pageWidth - pageMargin, cursorY);
+                      cursorY += 8;
+                  });
+
+                // --- Footer / Signature ---
+                  const signatureY = pageHeight - 30;
+                  doc.setDrawColor(23, 37, 84);
+                  doc.setLineWidth(0.3);
+                  doc.line(mainContentX, signatureY, pageWidth - pageMargin, signatureY);
+                  doc.setFontSize(10);
+                  doc.setFont("helvetica", "normal");
+                  doc.setTextColor(45, 55, 72);
+                  doc.text("Firma del M.V.Z.", mainContentX, signatureY + 5);
+
+
+                doc.save(`Receta-${patient.name.replace(/\s/g, '_')}.pdf`);
+                showNotification("PDF generado exitosamente.", "success");
+            };
+            
+              // --- UI SUB-COMPONENTS ---
+            const MedicationSearch = ({ selectedMed, onSelect, species, subSpecies, favorites, toggleFavorite }) => {
+                const [searchTerm, setSearchTerm] = React.useState(selectedMed ? selectedMed.name : '');
+                const [isFocused, setIsFocused] = React.useState(false);
+                const searchRef = React.useRef(null);
+
+                React.useEffect(() => {
+                    setSearchTerm(selectedMed ? selectedMed.name : '');
+                }, [selectedMed]);
+                
+                  const filteredMeds = React.useMemo(() => {
+                    const allFiltered = allMedications.filter(m => {
+                        const hasDoses = m.doses && Object.keys(m.doses).length > 0;
+                        const matchesSearch = searchTerm === '' || 
+                                              m.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                                              (m.commercial_names && m.commercial_names.some(name => name.toLowerCase().includes(searchTerm.toLowerCase())));
+                        return hasDoses && matchesSearch;
+                    });
+                    
+                    return allFiltered.sort((a, b) => {
+                        const aIsFav = favorites.includes(a.name);
+                        const bIsFav = favorites.includes(b.name);
+                        if (aIsFav && !bIsFav) return -1;
+                        if (!aIsFav && bIsFav) return 1;
+                        return a.name.localeCompare(b.name);
+                    });
+                }, [searchTerm, species, subSpecies, favorites, allMedications]);
+
+
+                const handleSelectMed = (medData) => {
+                    setSearchTerm(medData ? medData.name : '');
+                    onSelect(medData);
+                    setIsFocused(false);
+                };
+                
+                React.useEffect(() => {
+                    const handleClickOutside = (event) => {
+                        if (searchRef.current && !searchRef.current.contains(event.target)) setIsFocused(false);
+                    };
+                    document.addEventListener("mousedown", handleClickOutside);
+                    return () => document.removeEventListener("mousedown", handleClickOutside);
+                }, []);
+
+                return (
+                    <div className="relative w-full" ref={searchRef}>
+                        <input type="text" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} onFocus={() => setIsFocused(true)} placeholder="Buscar medicamento..." className="w-full px-3 py-2 text-gray-200 bg-slate-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal"/>
+                        {searchTerm && (
+                            <button onClick={() => handleSelectMed(null)} className="absolute right-10 top-0 h-full px-2 text-gray-500 hover:text-white">
+                                <X className="w-4 h-4"/>
+                            </button>
+                        )}
+                        {isFocused && (
+                            <ul className="absolute z-20 w-full mt-1 bg-slate-700 border border-slate-600 rounded-lg max-h-60 overflow-y-auto" style={{ WebkitOverflowScrolling: 'touch' }}>
+                                {filteredMeds.length > 0 ? filteredMeds.map(medData => {
+                                    const isFav = favorites.includes(medData.name);
+                                    return (
+                                    <li key={medData.name} onClick={() => handleSelectMed(medData)} className={`flex justify-between items-center px-4 py-2 cursor-pointer hover:bg-slate-600 text-gray-200 ${isFav ? 'bg-slate-800' : ''}`}>
+                                        <div>
+                                            <p className="font-bold">{medData.name}</p>
+                                            <p className="text-xs text-gray-400">{(medData.commercial_names && medData.commercial_names.join(', ')) || 'N/A'}</p>
+                                        </div>
+                                        <button onClick={(e) => { e.stopPropagation(); toggleFavorite(medData.name); }} className={`p-1 rounded-full hover:bg-slate-500 ${isFav ? 'text-yellow-400' : 'text-gray-500'}`}>
+                                            <Star size={16} fill={isFav ? 'currentColor' : 'none'} />
+                                        </button>
+                                    </li>
+                                    );
+                                }) : <li className="px-4 py-2 text-gray-400">No hay coincidencias.</li>}
+                            </ul>
+                        )}
+                        <button onClick={() => setIsFocused(!isFocused)} className="absolute right-0 top-0 h-full px-3 text-gray-400 hover:text-white">
+                            <ChevronDown className="w-5 h-5"/>
+                        </button>
+                    </div>
+                );
+            };
+
+            const DosageBlock = ({ med, index, handleUpdateUserMed, patient }) => {
+                const [localConcentration, setLocalConcentration] = React.useState('');
+                const [localCustomRecDose, setLocalCustomRecDose] = React.useState('');
+                const [isDirty, setIsDirty] = React.useState(false);
+                
+                React.useEffect(() => {
+                    setLocalConcentration(med.concentration);
+                    setLocalCustomRecDose(med.customRecDose);
+                }, [med.concentration, med.customRecDose]);
+
+                const removeMedication = (index) => {
+                    setMedications(medications.filter((_, i) => i !== index));
+                };
+
+                const medData = med.selectedMed;
+                const doseOptions = React.useMemo(() => getDoseOptions(medData, patient.species, patient.subSpecies), [medData, patient.species, patient.subSpecies]);
+                const currentPurposeData = doseOptions[med.selectedPurposeIndex] || {};
+                
+                const purposeDataForCalc = { 
+                    ...currentPurposeData, 
+                    dose_range_rec: parseFloat(localCustomRecDose) 
+                };
+
+                React.useEffect(() => {
+                    if (!medData) {
+                        setIsDirty(false);
+                        return;
+                    }
+                    const originalMed = allMedications.find(m => m.name === medData.name);
+                    if (!originalMed || !med.selectedPresentation) {
+                         setIsDirty(false);
+                         return;
+                    }
+                    
+                    const originalConcentrationStr = originalMed.concentration[med.selectedPresentation] || '';
+                    const originalConcentrationNum = originalConcentrationStr.match(/(\d+\.?\d*)/)?.[0] || '';
+
+                    const originalDoseOptions = getDoseOptions(originalMed, patient.species, patient.subSpecies);
+                    const originalPurposeData = originalDoseOptions[med.selectedPurposeIndex] || {};
+                    
+                    const concChanged = originalConcentrationNum !== localConcentration;
+                    const doseChanged = (originalPurposeData.dose_range_rec !== undefined && parseFloat(originalPurposeData.dose_range_rec) !== parseFloat(localCustomRecDose));
+
+                    setIsDirty(concChanged || doseChanged);
+
+                }, [medData, localConcentration, localCustomRecDose, med.selectedPurposeIndex, med.selectedPresentation, patient.species, patient.subSpecies]);
+
+                const handleSaveChanges = () => {
+                     const originalMed = allMedications.find(m => m.name === medData.name);
+                     if (!originalMed || !med.selectedPresentation) return;
+
+                     // Create a deep copy to avoid direct mutation
+                     const medToSave = JSON.parse(JSON.stringify(originalMed));
+
+                     // Update concentration
+                     const oldConcStr = medToSave.concentration[med.selectedPresentation];
+                     const newConcStr = oldConcStr.replace(/(\d+\.?\d*)/, localConcentration);
+                     medToSave.concentration[med.selectedPresentation] = newConcStr;
+
+                     // Update dose
+                     const speciesKey = patient.subSpecies || patient.species;
+                     if(medToSave.doses[speciesKey] && medToSave.doses[speciesKey][med.selectedPurposeIndex]){
+                         medToSave.doses[speciesKey][med.selectedPurposeIndex].dose_range_rec = parseFloat(localCustomRecDose);
+                     }
+
+                     handleUpdateUserMed(medToSave);
+                     setIsDirty(false);
+                };
+                
+                const parseUnitString = (unitStr) => {
+                    if (!unitStr) return { multiplier: 1, unit: 'mg' };
+                    const lowerStr = unitStr.toLowerCase();
+                    if (lowerStr.includes('mcg')) return { multiplier: 0.001, unit: 'mcg' };
+                    if (lowerStr.includes('ui')) return { multiplier: 1, unit: 'UI' };
+                    if (lowerStr.includes('g')) return { multiplier: 1000, unit: 'g' };
+                    return { multiplier: 1, unit: 'mg' };
+                }
+
+                const calculateDose = (purpose, weight, med) => {
+                    if (!purpose || !weight || !med.selectedMed || !med.selectedPresentation || !purpose.unit) return null;
+
+                    const concentrationValStr = med.selectedMed.concentration[med.selectedPresentation];
+                    if (!concentrationValStr) return null;
+                    
+                    const concentrationNum = parseFloat(concentrationValStr.match(/(\d+\.?\d*)/)?.[0]);
+                    const weightNum = parseFloat(weight);
+
+                    if (isNaN(concentrationNum) || concentrationNum <= 0 || isNaN(weightNum) || weightNum <= 0) return null;
+                    
+                    const doseUnitInfo = parseUnitString(purpose.unit);
+                    const concUnitInfo = parseUnitString(concentrationValStr);
+                    
+                    const calc = (doseVal) => {
+                        if (doseVal === null || typeof doseVal === 'undefined' || isNaN(doseVal)) return { value: 'N/A', unit: '', formula: '' };
+                        
+                        let totalDoseAmount;
+                        let formula = '';
+                        
+                        if (purpose.unit.includes('/kg')) {
+                            totalDoseAmount = doseVal * weightNum;
+                            formula = `(${doseVal} ${purpose.unit.split('/')[0]} * ${weightNum}kg)`;
+                        } else if (purpose.unit.includes('/perro') || purpose.unit.includes('/gato') || purpose.unit.includes('por gato') || purpose.unit.includes('/hurón')) {
+                            totalDoseAmount = doseVal;
+                            formula = `${doseVal} ${purpose.unit}`;
+                        } else {
+                            return { value: doseVal, unit: purpose.unit.split(' ')[0], formula: 'Dosis directa' };
+                        }
+
+                        let finalUnit = "mL";
+                        if(concentrationValStr.toLowerCase().includes("tableta")){ finalUnit = "tabletas"; } 
+                        else if (concentrationValStr.toLowerCase().includes("cápsula")){ finalUnit = "cápsulas"; }
+                        else if (concentrationValStr.toLowerCase().includes("parche")){ finalUnit = "parche(s)"; }
+                        
+                        const doseInBaseUnits = totalDoseAmount * doseUnitInfo.multiplier;
+                        const concInBaseUnits = concentrationNum * concUnitInfo.multiplier;
+
+                        const finalValue = doseInBaseUnits / concInBaseUnits;
+                        
+                        return {
+                            value: finalValue % 1 === 0 ? finalValue : finalValue.toFixed(2), // FIX: Change to 2 decimal places
+                            unit: finalUnit,
+                            formula: `${formula} / ${concentrationValStr}`
+                        };
+                    };
+                    return { min: calc(purpose.dose_range_min), rec: calc(purpose.dose_range_rec), max: calc(purpose.dose_range_max) };
+                };
+
+                const calculatedDoses = calculateDose(purposeDataForCalc, patient.weight, med);
+
+                const DoseDisplay = ({ dose, label, color, type, isSelected, onSelect }) => {
+                    const selectedClasses = "ring-2 ring-offset-2 ring-offset-slate-800";
+                    const colorClasses = {
+                        yellow: `border-yellow-500/50 ${isSelected ? "ring-yellow-500" : ""}`,
+                        green: `border-green-500/50 ${isSelected ? "ring-green-500" : ""}`,
+                        red: `border-red-500/50 ${isSelected ? "ring-red-500" : ""}`,
+                    };
+
+                    if (!dose || dose.value === 'N/A') return <div className="p-2 border border-gray-600 rounded-lg flex items-center justify-center cursor-not-allowed"><p className="text-gray-500">N/A</p></div>;
+                    
+                    return (
+                        <div onClick={onSelect} className={`p-2 border rounded-lg overflow-hidden cursor-pointer relative transition-all ${colorClasses[color]} ${isSelected ? selectedClasses : "hover:scale-105"}`}>
+                           {isSelected && (
+                                <button onClick={(e) => { e.stopPropagation(); onSelect(null); }} className="absolute top-1 right-1 bg-slate-700 rounded-full p-0.5 text-white hover:bg-slate-600 z-10">
+                                    <X size={12} />
+                                </button>
+                            )}
+                            <p className={`text-xs text-${color}-400 font-bold`}>{label}</p>
+                            <p className={`text-xl text-${color}-400 font-mono font-bold`}>
+                                {dose.value} <span className="text-sm">{dose.unit}</span>
+                            </p>
+                            <p className="text-[10px] text-gray-500 font-mono break-all">{dose.formula}</p>
+                        </div>
+                    );
+                };
+
+                const doseDisplaySection = () => {
+                    if (!calculatedDoses) return <div className="p-3 bg-gray-700/50 rounded-lg text-center text-gray-400"><p>Complete los datos para calcular la dosis.</p></div>;
+
+                    if (med.selectedDoseType) {
+                        const type = med.selectedDoseType;
+                        const label = { min: "MÍNIMA", rec: "RECOMENDADA", max: "MÁXIMA" }[type];
+                        const color = { min: "yellow", rec: "green", max: "red" }[type];
+                        return (
+                             <DoseDisplay dose={calculatedDoses[type]} label={label} color={color} type={type} isSelected={true} onSelect={() => handleMedicationUpdate(index, 'selectedDoseType', null)} />
+                        );
+                    }
+
+                    return (
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-center">
+                            <DoseDisplay dose={calculatedDoses.min} label="MÍNIMA" color="yellow" type="min" isSelected={false} onSelect={() => handleMedicationUpdate(index, 'selectedDoseType', 'min')} />
+                            <DoseDisplay dose={calculatedDoses.rec} label="RECOMENDADA" color="green" type="rec" isSelected={false} onSelect={() => handleMedicationUpdate(index, 'selectedDoseType', 'rec')} />
+                            <DoseDisplay dose={calculatedDoses.max} label="MÁXIMA" color="red" type="max" isSelected={false} onSelect={() => handleMedicationUpdate(index, 'selectedDoseType', 'max')} />
+                        </div>
+                    );
+                };
+
+                return (
+                      <div className="bg-slate-800 p-4 rounded-xl shadow-lg mt-4 border border-slate-700">
+                           <div className="flex justify-between items-center mb-4 gap-2">
+                               <label className="block text-gray-300 text-sm font-bold whitespace-nowrap">Medicamento</label>
+                               <div className="flex items-center w-full">
+                                   <MedicationSearch selectedMed={medData} onSelect={(data) => handleMedicationUpdate(index, 'select', data)} species={patient.species} subSpecies={patient.subSpecies} favorites={favorites} toggleFavorite={toggleFavorite} />
+                                   {medications.length > 1 && (<button onClick={() => removeMedication(index)} className="ml-2 p-2 bg-red-600 text-white rounded-full hover:bg-red-700 transition-colors" title="Eliminar medicamento"><X size={16} /></button>)}
+                               </div>
+                           </div>
+                           
+                           {medData && (
+                           <div className="space-y-4">
+                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                                   {medData.concentration && Object.keys(medData.concentration).length > 0 && (
+                                        <div>
+                                           <label className="text-gray-300 text-sm font-bold mr-2 mb-1 block whitespace-nowrap">Presentación:</label>
+                                           <select value={med.selectedPresentation} onChange={e => handleMedicationUpdate(index, 'selectedPresentation', e.target.value)} className="w-full px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal">
+                                               {Object.keys(medData.concentration).map((pres) => (
+                                                   <option key={pres} value={pres}>{pres} ({medData.concentration[pres]})</option>
+                                               ))}
+                                           </select>
+                                       </div>
+                                   )}
+                                   {doseOptions && doseOptions.length > 0 && (
+                                        <div className="w-full">
+                                           <label className="text-gray-300 text-sm font-bold mr-2 mb-1 block whitespace-nowrap">Uso del Medicamento:</label>
+                                           <select value={med.selectedPurposeIndex} onChange={e => handleMedicationUpdate(index, 'selectedPurposeIndex', parseInt(e.target.value))} className="w-full px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal">
+                                               {doseOptions.map((dose, idx) => (
+                                                   <option key={`${dose.purpose}-${idx}`} value={idx}>{dose.purpose}</option>
+                                               ))}
+                                           </select>
+                                       </div>
+                                   )}
+                               </div>
+                               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+                                   <div>
+                                       <label className="text-gray-300 text-sm font-bold mr-2 whitespace-nowrap">Concentración Numérica:</label>
+                                       <input type="text" inputMode="decimal" value={localConcentration} onChange={(e) => setLocalConcentration(e.target.value)} onBlur={() => handleMedicationUpdate(index, 'concentration', localConcentration)} className="w-full mt-1 px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal" placeholder="Ej: 50" />
+                                   </div>
+                                   <div>
+                                       <label className="text-gray-300 text-sm font-bold mr-2 whitespace-nowrap">Dosis Manual:</label>
+                                        <input type="text" inputMode="decimal" value={localCustomRecDose} onChange={(e) => setLocalCustomRecDose(e.target.value)} onBlur={() => handleMedicationUpdate(index, 'customRecDose', localCustomRecDose)} className="w-full mt-1 px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal" />
+                                        {currentPurposeData.dose_range_min !== undefined && (
+                                           <p className="text-xs text-gray-400 mt-1">
+                                                Rango Sugerido: {currentPurposeData.dose_range_min} - {currentPurposeData.dose_range_max} {currentPurposeData.unit}
+                                           </p>
+                                       )}
+                                   </div>
+                               </div>
+                               
+                               {isDirty && (
+                                   <button onClick={handleSaveChanges} className="w-full flex items-center justify-center gap-2 py-2 px-4 bg-green-600 hover:bg-green-700 rounded-lg text-white font-bold text-sm">
+                                       <Save size={16} /> Guardar Cambios en Vademécum
+                                   </button>
+                               )}
+
+                               <div className="my-4">
+                                   <h3 className="text-md font-bold text-gray-300 mb-2">Dosis Calculada (Selecciona una)</h3>
+                                   {doseDisplaySection()}
+                                   {calculatedDoses && (
+                                       <div className="text-center mt-2 text-sm text-gray-400">
+                                           <p>Vía: <span className="font-bold text-gray-200">{currentPurposeData.route || 'N/A'}</span></p>
+                                           <p>Frecuencia: <span className="font-bold text-gray-200">{currentPurposeData.frequency || 'N/A'}</span></p>
+                                       </div>
+                                   )}
+                               </div>
+                               
+                               <MedicationInfo medData={medData} />
+                           </div>
+                           )}
+                      </div>
+                );
+            };
+            
+            // --- RENDER LOGIC ---
+            const renderContent = () => {
+                const isExoticCategory = ['Aves', 'Reptiles', 'Conejos', 'Anfibios', 'Pequeños Mamíferos'].includes(patient.species);
+                
+                switch (activeView) {
+                    case 'emergency': return <EmergencyMode onExit={() => setActiveView('calculator')} />;
+                    case 'tools': return <ToolsMenu onSelect={(tool) => setActiveView(tool)} />;
+                    case 'fluid': return <FluidTherapyCalculator onClose={() => setActiveView('calculator')} />;
+                    case 'bsa': return <BSACalculator onClose={() => setActiveView('calculator')} />;
+                    case 'cri': return <CRICalculator onClose={() => setActiveView('calculator')} />;
+                    case 'dilution': return <DilutionCalculator onClose={() => setActiveView('calculator')} />;
+                    case 'vademecum': return <VademecumView allMedications={allMedications} favorites={favorites} toggleFavorite={toggleFavorite} onClose={() => setActiveView('calculator')} handleUpdateUserMed={handleUpdateUserMed} onGetMoreInfo={handleGetMoreInfo} showNotification={showNotification}/>;
+                    case 'protocols': return <AnestheticProtocolsView onClose={() => setActiveView('calculator')} />;
+                    case 'constants': return <PhysiologicalConstantsView onClose={() => setActiveView('calculator')} />;
+                    case 'addMed': return <AddMedicationAI onSave={handleAddNewMedication} onClose={() => setActiveView('calculator')} />;
+                    case 'timer': return <TimerTool onClose={() => setActiveView('calculator')} />;
+                    case 'calculator':
+                    default:
+                        return (
+                           <div className="bg-slate-900 p-6 rounded-3xl shadow-xl border border-gray-700">
+                              <h2 className="text-xl font-bold mb-4 text-white">Información del Paciente</h2>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-4">
+                                    <div>
+                                        <label htmlFor="patientName" className="block text-sm font-bold text-gray-400 mb-1">Nombre</label>
+                                        <input id="patientName" type="text" name="name" value={patient.name} onChange={handlePatientChange} className="w-full px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal" />
+                                    </div>
+                                    <div>
+                                        <label htmlFor="patientSpecies" className="block text-sm font-bold text-gray-400 mb-1">Especie</label>
+                                        <select id="patientSpecies" name="species" value={patient.species} onChange={handlePatientChange} className="w-full px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal">
+                                            <option value="">Selecciona</option>
+                                            {speciesList.map(species => (<option key={species} value={species}>{speciesEmojis[species] || ''} {species}</option>))}
+                                        </select>
+                                    </div>
+                                    {isExoticCategory && (
+                                        <div>
+                                            <label htmlFor="patientSubSpecies" className="block text-sm font-bold text-gray-400 mb-1">{patient.species}</label>
+                                            <select id="patientSubSpecies" name="subSpecies" value={patient.subSpecies} onChange={handlePatientChange} className="w-full px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal">
+                                                <option value="">Selecciona específico</option>
+                                                {exoticSpeciesMap[patient.species] && exoticSpeciesMap[patient.species].map(subSpecies => (
+                                                    <option key={subSpecies} value={subSpecies}>{subSpecies}</option>
+                                                ))}
+                                            </select>
+                                        </div>
+                                    )}
+                                     <div>
+                                        <label htmlFor="patientWeight" className="block text-sm font-bold text-gray-400 mb-1">Peso (kg)</label>
+                                        <input id="patientWeight" type="number" name="weight" value={patient.weight} onChange={handlePatientChange} min="0" step="0.1" className="w-full px-4 py-2 bg-slate-700 text-gray-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-normal" placeholder="Ej: 10.5"/>
+                                    </div>
+                                </div>
+                                
+                                {interactionWarning && (
+                                    <div className="flex items-start p-3 my-4 bg-purple-900/50 border-l-4 border-purple-500 rounded-md text-purple-300">
+                                        <AlertTriangle className="mr-3 flex-shrink-0 mt-1" />
+                                        <div><strong className="font-bold">Posible Interacción:</strong> {interactionWarning}</div>
+                                    </div>
+                                )}
+
+                                {(patient.species && patient.weight && (!isExoticCategory || patient.subSpecies)) ? medications.map((med, index) => (<DosageBlock key={med.id} med={med} index={index} handleUpdateUserMed={handleUpdateUserMed} patient={patient} />)) : (
+                                   <div className="text-center py-8 text-gray-500">
+                                     <p>Por favor, completa la información del paciente para empezar.</p>
+                                   </div>
+                                )}
+                                
+                                {(patient.species && patient.weight && (!isExoticCategory || patient.subSpecies)) && (
+                                   <div className="flex flex-wrap items-center justify-between mt-6 gap-3">
+                                     <button onClick={addMedication} className="flex items-center space-x-2 px-4 py-2 text-white bg-blue-600 rounded-full hover:bg-blue-700 transition-colors shadow-lg"><PlusCircle size={20} /><span>Añadir Medicamento</span></button>
+                                     <div className="flex items-center gap-3">
+                                         <button onClick={handleSaveDosis} className="flex items-center space-x-2 px-4 py-2 text-white bg-green-600 rounded-full hover:bg-green-700 transition-colors shadow-lg"><ClipboardList size={20} /><span>Guardar Dosis</span></button>
+                                         <button onClick={handleGeneratePdf} className="flex items-center space-x-2 px-4 py-2 text-white bg-red-600 rounded-full hover:bg-red-700 transition-colors shadow-lg"><FileDown size={20} /><span>Generar PDF</span></button>
+                                     </div>
+                                   </div>
+                                )}
+                          </div>
+                        );
+                }
+            }
+
+
+        return (
+          <div className="min-h-screen bg-slate-950 p-4 font-sans text-gray-200">
+              <div className="max-w-4xl mx-auto">
+                  {notification && (<div className={`fixed top-5 right-5 p-4 rounded-lg shadow-lg text-white z-50 animate-fade-in-out ${notification.type === 'success' ? 'bg-green-600' : notification.type === 'error' ? 'bg-red-600' : 'bg-blue-600'}`}>{notification.message}</div>)}
+
+                  <div className="text-center p-4">
+                      <h1 className="text-3xl sm:text-4xl font-extrabold text-white">Dosis Perronas</h1>
+                      <p className="text-sm text-gray-400 font-normal">by: Arturo Alvarado</p>
+                  </div>
+                  
+                  <div className="flex justify-center items-center flex-wrap gap-2 p-2 mb-6 bg-slate-900 rounded-xl">
+                        <button onClick={() => setActiveView(activeView === 'calculator' ? 'tools' : 'calculator')} className="p-2 text-gray-400 hover:text-white transition-colors" title="Herramientas"><Menu size={24} /></button>
+                        <button onClick={() => setActiveView('emergency')} className="p-2 text-red-500 hover:text-red-400 transition-colors" title="Modo Emergencia"><Siren size={24} /></button>
+                        <button onClick={handleReset} className="p-2 text-gray-400 hover:text-red-500 transition-colors" title="Reiniciar"><RotateCw size={24} /></button>
+                        <button onClick={() => setShowHistory(true)} className="p-2 text-gray-400 hover:text-white transition-colors" title="Historial"><MoreVertical size={24} /></button>
+                  </div>
+                    
+                    {renderContent()}
+
+                    {showHistory && <HistoryModal history={dosisHistory} onClose={() => setShowHistory(false)} onRestore={handleRestoreDosis} />}
+                    <AiInfoModal med={currentMedForAi} show={showAiModal} onClose={() => setShowAiModal(false)} />
+              </div>
+          </div>
+        );
+      };
+      
+        ReactDOM.render(<DosisApp />, document.getElementById('root'));
+    </script>
+</body>
+</html>
